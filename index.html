@@ -161,10 +161,18 @@ const SUM_KEY = "own-hn-summaries-v2"; // bump to drop summaries saved in an old
 function getKey() { try { return localStorage.getItem(KEY_KEY) || ""; } catch { return ""; } }
 
 function askKey() {
-  const v = prompt("Anthropic API key (stored only in this browser). Leave empty to remove it.", getKey());
-  if (v === null) return getKey();
-  try { v.trim() ? localStorage.setItem(KEY_KEY, v.trim()) : localStorage.removeItem(KEY_KEY); } catch {}
-  return v.trim();
+  // Never put the saved key back on screen; show only its last 4 characters.
+  const cur = getKey();
+  const msg = cur
+    ? `API key …${cur.slice(-4)} saved.\nPaste a new one, type "remove", or leave empty to keep it.`
+    : "Paste your Anthropic API key.";
+  const v = (prompt(msg, "") || "").trim();
+  if (!v) return cur;
+  try {
+    if (v.toLowerCase() === "remove") { localStorage.removeItem(KEY_KEY); return ""; }
+    localStorage.setItem(KEY_KEY, v);
+  } catch {}
+  return v;
 }
 
 function loadSummaries() {
