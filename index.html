@@ -23,7 +23,9 @@
     background: var(--accent); color: var(--accent-text);
     padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
     font-weight: 700; font-size: 18px;
+    display: flex; justify-content: space-between; align-items: center;
   }
+  header button { background: none; border: 0; color: inherit; font-size: 14px; padding: 4px 0; }
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px 40px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   .chips { display: flex; flex-direction: column; gap: 6px; }
@@ -36,21 +38,31 @@
   ol { list-style: none; margin: 0; padding: 0; }
   li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
   li a.t { color: var(--text); text-decoration: none; font-weight: 600; }
+  [hidden] { display: none !important; }
+  button.more {
+    display: block; width: 100%; margin: 12px 0 8px; padding: 10px; font-size: 15px;
+    border: 1px dashed var(--line); border-radius: 8px; background: none; color: var(--muted);
+  }
   li.read { opacity: 0.5; }
   li.read a.t { font-weight: 400; }
   .dom { color: var(--muted); font-size: 13px; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meta a { color: var(--muted); }
+  .meta button.sum { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; }
+  .summary { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); font-size: 14px; }
+  .summary.err { color: var(--muted); }
   .pts { color: var(--accent); font-weight: 700; }
 </style>
 </head>
 <body>
-<header>Own-HN</header>
+<header>Own-HN <button id="keyBtn" type="button">⚙ API key</button></header>
 <main>
   <div class="card"><div class="chips" id="chips"></div></div>
 
   <div id="status"></div>
   <ol id="list"></ol>
+  <button class="more" id="moreBtn" type="button" hidden></button>
+  <ol id="hiddenList" hidden></ol>
 </main>
 
 <script>
@@ -61,11 +73,12 @@ const HOURS = 24;
 const TAGS = "(story,poll)";
 // Quick filters. Points max is inclusive; null means no upper limit.
 const PRESETS = [
-  { id: "100", label: "100+", min: 100, max: 199 },
-  { id: "200", label: "200+", min: 200, max: 299 },
-  { id: "300", label: "300+", min: 300, max: 399 },
-  { id: "400", label: "400+", min: 400, max: 499 },
-  { id: "500", label: "500+", min: 500, max: null },
+// techOnly hides stories that don't look tech-related (see isTech below).
+  { id: "100", label: "100+", min: 100, max: 199, techOnly: true },
+  { id: "200", label: "200+", min: 200, max: 299, techOnly: true },
+  { id: "300", label: "300+", min: 300, max: 399, techOnly: true },
+  { id: "400", label: "400+", min: 400, max: 499, techOnly: true },
+  { id: "500", label: "500+", min: 500, max: null, techOnly: true },
   { id: "ai", label: "AI 10+", min: 10, max: null, q: "ai" },
 ];
 const DEFAULT_ID = "500";
@@ -125,8 +138,154 @@ function ago(ts) {
   return h < 24 ? h + "h ago" : Math.floor(h / 24) + "d ago";
 }
 
+// Summaries come from Claude via the Anthropic API, called straight from this page.
+// Your API key is kept only in this browser (localStorage); it is never part of the site.
+// Claude's web fetch tool reads the article on Anthropic's side, so no other service is needed.
+const KEY_KEY = "own-hn-anthropic-key";
+const SUM_KEY = "own-hn-summaries";
+
+function getKey() { try { return localStorage.getItem(KEY_KEY) || ""; } catch { return ""; } }
+
+function askKey() {
+  const v = prompt("Anthropic API key (stored only in this browser). Leave empty to remove it.", getKey());
+  if (v === null) return getKey();
+  try { v.trim() ? localStorage.setItem(KEY_KEY, v.trim()) : localStorage.removeItem(KEY_KEY); } catch {}
+  return v.trim();
+}
+
+function loadSummaries() {
+  try {
+    const all = JSON.parse(localStorage.getItem(SUM_KEY)) || {};
+    const now = Date.now();
+    for (const id in all) if (now - all[id].at > READ_TTL) delete all[id];
+    return all;
+  } catch { return {}; }
+}
+
+function saveSummary(id, text) {
+  try {
+    const all = loadSummaries();
+    all[id] = { at: Date.now(), text };
+    localStorage.setItem(SUM_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+async function summarize(h) {
+  const url = h.url || "https://news.ycombinator.com/item?id=" + h.objectID;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": getKey(),
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-opus-5",
+      max_tokens: 2048,
+      output_config: { effort: "low" },
+      fallbacks: "default", // if the model declines, Anthropic retries on a suitable fallback model
+      tools: [{ type: "web_fetch_20250910", name: "web_fetch", max_uses: 1, max_content_tokens: 8000 }],
+      messages: [{
+        role: "user",
+        content: `Fetch ${url} and summarize it in 150 words or fewer. ` +
+          `Reply with the summary only, as plain text, no preamble. ` +
+          `If the page can't be fetched, say so in one short sentence.\n\nTitle: ${h.title}`,
+      }],
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("API key was rejected. Tap ⚙ API key to fix it.");
+    throw new Error(data.error?.message || "HTTP " + res.status);
+  }
+  if (data.stop_reason === "refusal") throw new Error("Claude declined to summarize this one.");
+  // Keep only the text written after the fetch result (drops "I'll fetch the page…" preamble).
+  const content = data.content || [];
+  const lastTool = content.map((b) => b.type).lastIndexOf("web_fetch_tool_result");
+  const text = content.slice(lastTool + 1).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  if (!text) throw new Error("No summary came back (" + data.stop_reason + ").");
+  return text;
+}
+
+function showSummary(li, text, isError) {
+  let box = li.querySelector(".summary");
+  if (!box) { box = document.createElement("div"); li.appendChild(box); }
+  box.className = "summary" + (isError ? " err" : "");
+  box.textContent = text;
+}
+
 function domain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+}
+
+// Tech filter: a story counts as tech if its title has a tech word or it links to a tech site.
+// Add words here when a tech story ends up under "hidden". Entries ending in * match word starts.
+const TECH_WORDS = `
+  ai agi llm llms gpt chatgpt claude anthropic openai gemini deepmind copilot mistral llama ollama
+  model* neural transformer* inference token* embedding* prompt* agent* agentic rag
+  machine-learning ml deep-learning dataset* benchmark* training fine-tun* diffusion
+  software hardware computer* comput* program* code coding coder* developer* dev devs devops
+  engineer* algorithm* data database* sql sqlite postgres postgresql mysql redis kafka
+  api apis sdk cli gui ui ux frontend backend fullstack web website* browser* html css
+  javascript js typescript ts node nodejs deno bun react vue svelte angular nextjs wasm webassembly
+  python rust go golang java kotlin swift c c++ c# .net dotnet ruby rails php perl haskell ocaml
+  elixir erlang clojure lisp scheme zig nim julia scala fortran cobol assembly asm lua dart
+  compiler* interpreter* runtime* bytecode jit llvm gcc clang syntax parser* type-system
+  linux unix bsd freebsd openbsd kernel* os windows macos ios android debian ubuntu fedora arch nixos nix
+  shell bash zsh terminal* vim emacs neovim vscode ide editor* git github gitlab commit* repo*
+  docker kubernetes k8s container* vm vms virtual* emulat* hypervisor cloud aws azure gcp serverless
+  server* datacenter* data-center* cpu* gpu* tpu* chip* semiconductor* silicon processor* risc-v riscv
+  arm x86 intel amd nvidia tsmc qualcomm memory ram dram ssd storage cache* simd fpga asic
+  pentium mhz ghz 8-bit 16-bit 32-bit 64-bit retro amiga commodore atari nes gameboy
+  network* networking protocol* tcp udp http https dns ip ipv6 wifi bluetooth 5g router* bgp ssh tls ssl
+  security vulnerabilit* exploit* cve malware ransomware hack* hacker* breach* sandbox* encrypt*
+  crypto* cryptograph* password* passkey* auth* oauth privacy surveillance spyware phishing zero-day
+  open-source opensource oss foss gpl mit-license license* bug* debug* debugger* test* testing
+  performance latency throughput optimiz* benchmark scaling distributed consensus raft paxos
+  app apps application* startup* saas platform* framework* libraries package* npm pip cargo
+  internet online email smtp rss protocol url urls domain* website blog* static-site
+  google apple microsoft meta amazon ibm oracle netflix tesla spacex twitter x.com reddit
+  youtube facebook instagram whatsapp tiktok mozilla firefox chrome chromium safari
+  algorithm robot* robotics automation drone* satellite* rocket* space physics math* mathematic*
+  quantum electronic* circuit* pcb arduino raspberry microcontroller* firmware embedded iot sensor*
+  gaming gamedev game-engine engine* graphics render* shader* opengl vulkan directx 3d pixel* display* screen*
+  file* filesystem* format* json yaml xml csv unicode utf-8 regex spreadsheet* excel
+  typeset* latex pdf markdown documentation docs spec* rfc standard* w3c ietf
+  keyboard* mouse laptop* smartphone* phone* iphone ipad mac pc tablet* e-ink
+  arxiv factorio minecraft godot unity unreal emulator*
+  mcp saml rsa xss csrf overflow* vpn* tailscale wireguard zero-knowledge jpeg png image* codec* video-codec
+  droid f-droid grapheneos discord slack sublime weights starlink waymo self-driving autonomous fiber
+  archive* snowden grammarly fable frontier abliteration
+`.trim().split(/\s+/);
+const TECH_EXACT = new Set(TECH_WORDS.filter((w) => !w.endsWith("*")));
+const TECH_STEMS = TECH_WORDS.filter((w) => w.endsWith("*")).map((w) => w.slice(0, -1));
+const TECH_SITES = [
+  "github.com", "gitlab.com", "codeberg.org", "sr.ht", "sourcehut.org", "go.dev", "rust-lang.org",
+  "tokio.rs", "python.org", "arxiv.org", "lwn.net", "anthropic.com", "openai.com", "huggingface.co",
+  "stackoverflow.com", "arstechnica.com", "theverge.com", "techcrunch.com", "theregister.com",
+  "tomshardware.com", "phoronix.com", "404media.co", "simonwillison.net", "mozilla.org",
+];
+const TECH_TLDS = [".dev", ".io", ".ai", ".rs", ".sh", ".tech", ".app"];
+
+function isTechWord(w) {
+  if (TECH_EXACT.has(w)) return true;
+  if (w.endsWith("s") && TECH_EXACT.has(w.slice(0, -1))) return true;
+  return TECH_STEMS.some((s) => w.startsWith(s));
+}
+
+function isTech(h) {
+  const t = h.title.toLowerCase();
+  if (t.startsWith("show hn")) return true;
+  const d = domain(h.url);
+  if (d && (TECH_SITES.some((s) => d === s || d.endsWith("." + s)) || TECH_TLDS.some((x) => d.endsWith(x)))) return true;
+  // Check whole tokens ("c++", "risc-v") and their hyphen parts ("git-bug" -> "git").
+  const tokens = t.match(/[a-z0-9.+#-]+/g) || [];
+  return tokens.some((tok) => {
+    tok = tok.replace(/^[.-]+|[.-]+$/g, "");
+    return isTechWord(tok) || tok.split("-").some(isTechWord);
+  });
 }
 
 // Stories you opened are remembered on this device so they can be dimmed.
@@ -152,9 +311,9 @@ function markRead(id, li) {
   } catch {}
 }
 
-function render(hits) {
+function render(list, hits) {
   const read = loadRead();
-  const list = $("list");
+  const sums = loadSummaries();
   list.replaceChildren();
   for (const h of hits) {
     const hn = "https://news.ycombinator.com/item?id=" + h.objectID;
@@ -183,8 +342,28 @@ function render(hits) {
     const c = document.createElement("a");
     c.href = hn;
     c.textContent = (h.num_comments || 0) + " comments";
+    const sb = document.createElement("button");
+    sb.type = "button";
+    sb.className = "sum";
+    sb.textContent = "Summarize";
+    sb.onclick = async () => {
+      if (!getKey() && !askKey()) return;
+      sb.disabled = true;
+      showSummary(li, "Summarizing…", true);
+      try {
+        const text = await summarize(h);
+        saveSummary(h.objectID, text);
+        showSummary(li, text, false);
+        sb.remove();
+      } catch (e) {
+        showSummary(li, e.message, true);
+        sb.disabled = false;
+      }
+    };
     meta.append(pts, ` · ${ago(h.created_at_i)} · by ${h.author} · `, c);
+    if (!sums[h.objectID]) meta.append(" · ", sb);
     li.appendChild(meta);
+    if (sums[h.objectID]) showSummary(li, sums[h.objectID].text, false);
 
     // Opening the article or the comments marks the story as read.
     li.addEventListener("click", (e) => { if (e.target.closest("a")) markRead(h.objectID, li); });
@@ -197,18 +376,36 @@ async function run(f) {
   const id = ++runId;
   $("status").textContent = "Loading…";
   try {
-    const hits = await fetchAll(f);
+    const all = await fetchAll(f);
     if (id !== runId) return; // a newer search started meanwhile
-    render(hits);
+    const hits = f.techOnly ? all.filter(isTech) : all;
+    const hidden = f.techOnly ? all.filter((h) => !isTech(h)) : [];
+    render($("list"), hits);
+    render($("hiddenList"), hidden);
+    $("hiddenList").hidden = true;
+    const more = $("moreBtn");
+    more.hidden = hidden.length === 0;
+    more.textContent = `Show ${hidden.length} non-tech ${hidden.length === 1 ? "story" : "stories"}`;
+    const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
     $("status").textContent = hits.length
-      ? `${hits.length} ${hits.length === 1 ? "story" : "stories"} in the last ${HOURS} hrs, most points first`
-      : `No stories match in the last ${HOURS} hrs.`;
+      ? `${n(hits.length)} in the last ${HOURS} hrs, most points first`
+      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${HOURS} hrs.`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
+    $("hiddenList").replaceChildren();
+    $("moreBtn").hidden = true;
     $("status").textContent = "Could not load news (" + e.message + "). Pull to refresh.";
   }
 }
+
+$("keyBtn").onclick = askKey;
+
+$("moreBtn").onclick = () => {
+  const list = $("hiddenList");
+  list.hidden = !list.hidden;
+  $("moreBtn").textContent = $("moreBtn").textContent.replace(/^(Show|Hide)/, list.hidden ? "Show" : "Hide");
+};
 
 select(fromUrl());
 </script>
