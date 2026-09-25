@@ -63,6 +63,7 @@
   .summary .note { margin: 6px 0 0; font-size: 12px; color: var(--muted); font-style: italic; }
   .summary.err { background: var(--bg); border-left-color: var(--line); color: var(--muted); }
   .pts { color: var(--accent); font-weight: 700; }
+  .hot { background: #ffe3cc; color: #b34700; border-radius: 999px; padding: 0 6px; font-weight: 600; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -81,6 +82,7 @@ const API = "https://hn.algolia.com/api/v1/search";
 // Every filter covers the last 24 hrs and all post types except comments.
 // The "story" tag already includes Show HN and Ask HN; polls are tagged separately.
 const HOURS = 24;
+const HOT_PER_HOUR = 30; // points per hour needed for the 🔥 Hot badge
 const TAGS = "(story,poll)";
 // Quick filters. Points max is inclusive; null means no upper limit.
 const PRESETS = [
@@ -456,7 +458,16 @@ function render(list, hits) {
       }
       sb.disabled = false;
     };
-    meta.append(pts, ` · ${ago(h.created_at_i)} · `, c, " · ", sb);
+    meta.append(pts);
+    // Hot: gaining points fast, averaged over the story's age (at least 1 hr to avoid early spikes).
+    const perHour = h.points / Math.max((Date.now() / 1000 - h.created_at_i) / 3600, 1);
+    if (perHour >= HOT_PER_HOUR) {
+      const hot = document.createElement("span");
+      hot.className = "hot";
+      hot.textContent = "🔥 Hot";
+      meta.append(" ", hot);
+    }
+    meta.append(` · ${ago(h.created_at_i)} · `, c, " · ", sb);
     li.appendChild(meta);
     if (saved) {
       showSummary(li, saved.text, false, saved.source);
