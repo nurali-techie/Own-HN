@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Own-HN">
+<!-- Home Screen app: let the orange header fill the status bar area instead of a blurred bar. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#ff6600">
 <meta name="color-scheme" content="light only">
 <title>Own-HN</title>
@@ -20,6 +22,7 @@
     -webkit-text-size-adjust: 100%;
   }
   header {
+    position: sticky; top: 0; z-index: 10;
     background: var(--accent); color: var(--accent-text);
     padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
     font-weight: 700; font-size: 18px;
