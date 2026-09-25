@@ -183,7 +183,14 @@ function render(hits) {
     const c = document.createElement("a");
     c.href = hn;
     c.textContent = (h.num_comments || 0) + " comments";
-    meta.append(pts, ` · ${ago(h.created_at_i)} · by ${h.author} · `, c);
+    // Opens Claude with the prompt filled in; runs on your Claude plan, no API key needed.
+    const sum = document.createElement("a");
+    sum.href = "https://claude.ai/new?q=" + encodeURIComponent(
+      `Summarize this article in a few bullet points: ${h.url || hn}\n\nTitle: ${h.title}`);
+    sum.target = "_blank";
+    sum.rel = "noopener";
+    sum.textContent = "Summarize";
+    meta.append(pts, ` · ${ago(h.created_at_i)} · by ${h.author} · `, c, " · ", sum);
     li.appendChild(meta);
 
     // Opening the article or the comments marks the story as read.
