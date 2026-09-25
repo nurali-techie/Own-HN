@@ -43,14 +43,25 @@
     display: block; width: 100%; margin: 12px 0 8px; padding: 10px; font-size: 15px;
     border: 1px dashed var(--line); border-radius: 8px; background: none; color: var(--muted);
   }
-  li.read { opacity: 0.5; }
+  /* Dim a read story but keep its summary easy to read. */
+  li.read > :not(.summary) { opacity: 0.5; }
   li.read a.t { font-weight: 400; }
   .dom { color: var(--muted); font-size: 13px; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meta a { color: var(--muted); }
   .meta button.sum { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; }
-  .summary { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); font-size: 14px; }
-  .summary.err { color: var(--muted); }
+  .summary {
+    margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; line-height: 1.45;
+    background: #fff4ec; border-left: 3px solid var(--accent);
+  }
+  .summary .tldr { margin: 0 0 6px; }
+  .summary .tldr b { color: var(--accent); }
+  .summary ul { margin: 0; padding-left: 18px; }
+  .summary li { background: none; border: 0; padding: 0; margin: 0 0 4px; border-radius: 0; }
+  .summary .why { margin: 6px 0 0; }
+  .summary .why b { color: var(--accent); }
+  .summary .note { margin: 6px 0 0; font-size: 12px; color: var(--muted); font-style: italic; }
+  .summary.err { background: var(--bg); border-left-color: var(--line); color: var(--muted); }
   .pts { color: var(--accent); font-weight: 700; }
 </style>
 </head>
@@ -118,7 +129,7 @@ async function fetchAll(f) {
       hitsPerPage: 1000,
       page,
       queryType: "prefixNone", // "ai" matches the word ai, not "aim" or "air"
-      attributesToRetrieve: "title,url,points,num_comments,created_at_i,author,objectID",
+      attributesToRetrieve: "title,url,points,num_comments,created_at_i,objectID",
       attributesToHighlight: "",
     });
     if (f.q) p.set("query", f.q);
@@ -142,7 +153,7 @@ function ago(ts) {
 // Your API key is kept only in this browser (localStorage); it is never part of the site.
 // Claude's web fetch tool reads the article on Anthropic's side, so no other service is needed.
 const KEY_KEY = "own-hn-anthropic-key";
-const SUM_KEY = "own-hn-summaries";
+const SUM_KEY = "own-hn-summaries-v2"; // bump to drop summaries saved in an older format
 
 function getKey() { try { return localStorage.getItem(KEY_KEY) || ""; } catch { return ""; } }
 
@@ -157,42 +168,41 @@ function loadSummaries() {
   try {
     const all = JSON.parse(localStorage.getItem(SUM_KEY)) || {};
     const now = Date.now();
-    for (const id in all) if (now - all[id].at > READ_TTL) delete all[id];
+    // Entries without a source predate failure detection and may hold a "couldn't fetch" message.
+    for (const id in all) if (now - all[id].at > READ_TTL || !all[id].source) delete all[id];
     return all;
   } catch { return {}; }
 }
 
-function saveSummary(id, text) {
+function saveSummary(id, text, source) {
   try {
     const all = loadSummaries();
-    all[id] = { at: Date.now(), text };
+    all[id] = { at: Date.now(), text, source };
     localStorage.setItem(SUM_KEY, JSON.stringify(all));
   } catch {}
 }
 
-async function summarize(h) {
-  const url = h.url || "https://news.ycombinator.com/item?id=" + h.objectID;
+const SUMMARY_FORMAT =
+  `for a busy engineer skimming Hacker News. Keep it short: 75 words or fewer in total. ` +
+  `Use exactly this format, no preamble, no markdown other than "- ":\n` +
+  `TL;DR: <one sentence, at most 20 words, giving the key fact or takeaway the title doesn't already say; ` +
+  `the reader has already seen the title, so never restate it>\n` +
+  `- <exactly 3 bullets, at most 12 words each, with the most interesting specifics>\n` +
+  `Why it matters: <one sentence, at most 15 words>`;
+
+async function askClaude(body) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key": getKey(),
       "anthropic-version": "2023-06-01",
-      "anthropic-beta": "server-side-fallback-2026-07-01",
       "anthropic-dangerous-direct-browser-access": "true",
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-opus-5",
-      max_tokens: 2048,
-      output_config: { effort: "low" },
-      fallbacks: "default", // if the model declines, Anthropic retries on a suitable fallback model
-      tools: [{ type: "web_fetch_20250910", name: "web_fetch", max_uses: 1, max_content_tokens: 8000 }],
-      messages: [{
-        role: "user",
-        content: `Fetch ${url} and summarize it in 150 words or fewer. ` +
-          `Reply with the summary only, as plain text, no preamble. ` +
-          `If the page can't be fetched, say so in one short sentence.\n\nTitle: ${h.title}`,
-      }],
+      model: "claude-haiku-4-5", // cheapest Claude model; plenty for short summaries
+      max_tokens: 1024,
+      ...body,
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -201,19 +211,91 @@ async function summarize(h) {
     throw new Error(data.error?.message || "HTTP " + res.status);
   }
   if (data.stop_reason === "refusal") throw new Error("Claude declined to summarize this one.");
-  // Keep only the text written after the fetch result (drops "I'll fetch the page…" preamble).
-  const content = data.content || [];
-  const lastTool = content.map((b) => b.type).lastIndexOf("web_fetch_tool_result");
-  const text = content.slice(lastTool + 1).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-  if (!text) throw new Error("No summary came back (" + data.stop_reason + ").");
-  return text;
+  return data.content || [];
 }
 
-function showSummary(li, text, isError) {
+// Plain text of the story's HN post and top comments, for when the article itself can't be read.
+async function hnDiscussion(h) {
+  const res = await fetch("https://hn.algolia.com/api/v1/items/" + h.objectID);
+  if (!res.ok) throw new Error("Couldn't load the HN discussion (HTTP " + res.status + ").");
+  const item = await res.json();
+  const plain = (html) => new DOMParser().parseFromString(html || "", "text/html").body.textContent.trim();
+  let out = item.text ? "Post text:\n" + plain(item.text) + "\n\n" : "";
+  for (const c of item.children || []) {
+    if (!c.text) continue;
+    out += "Comment: " + plain(c.text) + "\n\n";
+    if (out.length > 8000) break;
+  }
+  return out.trim();
+}
+
+// Returns { text, source } where source is "article" or "comments".
+async function summarize(h) {
+  if (h.url) {
+    const content = await askClaude({
+      tools: [{ type: "web_fetch_20250910", name: "web_fetch", max_uses: 1, max_content_tokens: 4000 }],
+      messages: [{
+        role: "user",
+        content: `Fetch ${h.url} and summarize it ${SUMMARY_FORMAT}\n\n` +
+          `If the fetch fails or the page has no real article text (for example it needs JavaScript ` +
+          `and only the title loaded), reply with exactly NO_CONTENT and nothing else.\n\nTitle: ${h.title}`,
+      }],
+    });
+    // Web fetch errors don't fail the request; they come back as an error block inside the result.
+    const fetched = content.some((b) => b.type === "web_fetch_tool_result" && b.content?.type === "web_fetch_result");
+    if (fetched) {
+      // Keep only the text written after the fetch result (drops "I'll fetch the page…" preamble).
+      const last = content.map((b) => b.type).lastIndexOf("web_fetch_tool_result");
+      const text = content.slice(last + 1).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+      if (text && !text.includes("NO_CONTENT")) return { text, source: "article" };
+    }
+  }
+  // The article couldn't be read (blocked, paywalled) or there is none (Ask HN): use the HN discussion.
+  const discussion = await hnDiscussion(h);
+  if (!discussion) throw new Error("Couldn't read the article, and there are no HN comments yet.");
+  const content = await askClaude({
+    messages: [{
+      role: "user",
+      content: `The article${h.url ? " at " + h.url + " couldn't be fetched" : " is an HN post"}. ` +
+        `From the title and the Hacker News discussion below, summarize what it is about and the main points people raise, ` +
+        `${SUMMARY_FORMAT}\n\nTitle: ${h.title}\n\n${discussion}`,
+    }],
+  });
+  const text = content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  if (!text) throw new Error("No summary came back.");
+  return { text, source: "comments" };
+}
+
+function showSummary(li, text, isError, source) {
   let box = li.querySelector(".summary");
   if (!box) { box = document.createElement("div"); li.appendChild(box); }
   box.className = "summary" + (isError ? " err" : "");
-  box.textContent = text;
+  box.replaceChildren();
+  let lines = isError ? [] : text.split("\n").map((l) => l.trim()).filter(Boolean);
+  // Drop any preamble the model writes before the TL;DR line.
+  const start = lines.findIndex((l) => /^tl;?dr:?/i.test(l));
+  if (start > 0) lines = lines.slice(start);
+  const bullets = lines.filter((l) => /^[-•*]\s/.test(l));
+  if (!bullets.length) { box.textContent = text; return; } // errors and older plain summaries
+  // Built with textContent only, so nothing from the API is ever parsed as HTML.
+  const add = (tag, cls, label, body) => {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (label) { const b = document.createElement("b"); b.textContent = label + " "; el.appendChild(b); }
+    el.append(body);
+    return el;
+  };
+  const ul = document.createElement("ul");
+  for (const l of lines) {
+    if (/^tl;?dr:?/i.test(l)) box.appendChild(add("p", "tldr", "TL;DR:", l.replace(/^tl;?dr:?\s*/i, "")));
+    else if (/^[-•*]\s/.test(l)) ul.appendChild(add("li", "", "", l.replace(/^[-•*]\s+/, "")));
+    else if (/^why it matters:?/i.test(l)) {
+      if (ul.childNodes.length) box.appendChild(ul);
+      box.appendChild(add("p", "why", "Why it matters:", l.replace(/^why it matters:?\s*/i, "")));
+    } else box.appendChild(add("p", "", "", l));
+  }
+  if (ul.childNodes.length && !ul.parentNode) box.appendChild(ul);
+  if (source === "comments") box.appendChild(add("p", "note", "", "Summarized from HN comments; the article couldn't be read."));
 }
 
 function domain(url) {
@@ -342,28 +424,43 @@ function render(list, hits) {
     const c = document.createElement("a");
     c.href = hn;
     c.textContent = (h.num_comments || 0) + " comments";
+    // One link per story: "Summarize" until there is a summary, then "Hide/Show summary".
     const sb = document.createElement("button");
     sb.type = "button";
     sb.className = "sum";
+    const saved = sums[h.objectID];
+    const setToggle = (collapsed) => {
+      sb.textContent = collapsed ? "Show summary" : "Hide summary";
+      const box = li.querySelector(".summary");
+      if (box) box.hidden = collapsed;
+    };
     sb.textContent = "Summarize";
     sb.onclick = async () => {
+      if (li.querySelector(".summary:not(.err)")) {
+        const collapsed = !li.querySelector(".summary").hidden;
+        setToggle(collapsed);
+        return;
+      }
       if (!getKey() && !askKey()) return;
       sb.disabled = true;
       showSummary(li, "Summarizing…", true);
       try {
-        const text = await summarize(h);
-        saveSummary(h.objectID, text);
-        showSummary(li, text, false);
-        sb.remove();
+        const { text, source } = await summarize(h);
+        saveSummary(h.objectID, text, source);
+        showSummary(li, text, false, source);
+        markRead(h.objectID, li);
+        setToggle(false);
       } catch (e) {
         showSummary(li, e.message, true);
-        sb.disabled = false;
       }
+      sb.disabled = false;
     };
-    meta.append(pts, ` · ${ago(h.created_at_i)} · by ${h.author} · `, c);
-    if (!sums[h.objectID]) meta.append(" · ", sb);
+    meta.append(pts, ` · ${ago(h.created_at_i)} · `, c, " · ", sb);
     li.appendChild(meta);
-    if (sums[h.objectID]) showSummary(li, sums[h.objectID].text, false);
+    if (saved) {
+      showSummary(li, saved.text, false, saved.source);
+      setToggle(true); // saved summaries start collapsed after a refresh
+    }
 
     // Opening the article or the comments marks the story as read.
     li.addEventListener("click", (e) => { if (e.target.closest("a")) markRead(h.objectID, li); });
