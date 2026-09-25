@@ -6,17 +6,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Own-HN">
 <meta name="theme-color" content="#ff6600">
+<meta name="color-scheme" content="light only">
 <title>Own-HN</title>
 <style>
   :root {
     --bg: #f6f6ef; --card: #fff; --text: #1a1a1a; --muted: #6b6b6b;
     --line: #e2e2d8; --accent: #ff6600; --accent-text: #fff;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #121212; --card: #1d1d1d; --text: #e8e8e8; --muted: #9a9a9a;
-      --line: #2e2e2e; --accent: #ff7a1a; --accent-text: #111;
-    }
   }
   * { box-sizing: border-box; }
   body {
@@ -41,7 +36,8 @@
   ol { list-style: none; margin: 0; padding: 0; }
   li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
   li a.t { color: var(--text); text-decoration: none; font-weight: 600; }
-  li a.t:visited { color: var(--muted); }
+  li.read { opacity: 0.5; }
+  li.read a.t { font-weight: 400; }
   .dom { color: var(--muted); font-size: 13px; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meta a { color: var(--muted); }
@@ -133,12 +129,37 @@ function domain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+// Stories you opened are remembered on this device so they can be dimmed.
+// Only the last 24 hrs are ever shown, so anything older than 2 days is dropped.
+const READ_KEY = "own-hn-read";
+const READ_TTL = 2 * 24 * 3600 * 1000;
+
+function loadRead() {
+  try {
+    const all = JSON.parse(localStorage.getItem(READ_KEY)) || {};
+    const now = Date.now();
+    for (const id in all) if (now - all[id] > READ_TTL) delete all[id];
+    return all;
+  } catch { return {}; }
+}
+
+function markRead(id, li) {
+  li.classList.add("read");
+  try {
+    const all = loadRead();
+    all[id] = Date.now();
+    localStorage.setItem(READ_KEY, JSON.stringify(all));
+  } catch {}
+}
+
 function render(hits) {
+  const read = loadRead();
   const list = $("list");
   list.replaceChildren();
   for (const h of hits) {
     const hn = "https://news.ycombinator.com/item?id=" + h.objectID;
     const li = document.createElement("li");
+    if (read[h.objectID]) li.className = "read";
 
     const a = document.createElement("a");
     a.className = "t";
@@ -165,6 +186,8 @@ function render(hits) {
     meta.append(pts, ` · ${ago(h.created_at_i)} · by ${h.author} · `, c);
     li.appendChild(meta);
 
+    // Opening the article or the comments marks the story as read.
+    li.addEventListener("click", (e) => { if (e.target.closest("a")) markRead(h.objectID, li); });
     list.appendChild(li);
   }
 }
