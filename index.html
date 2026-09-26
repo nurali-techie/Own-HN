@@ -110,7 +110,7 @@ const PRESETS = [
   { id: "500", label: "500+", min: 500, max: null, techOnly: true },
   { id: "ai", label: "AI 10+", min: 10, max: null, q: "ai" },
   { id: "ai20", label: "AI 20+", min: 20, max: null, q: "ai" },
-  { id: "eyes", label: "Keep eyes", min: 1, max: null, competitors: true, hours: 7 * 24 },
+  { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24 },
 ];
 const DEFAULT_ID = "500";
 
@@ -137,7 +137,7 @@ function select(p) {
   run(p);
 }
 
-// Inference competitors for the "Keep eyes" button: [name, search word, pattern checked on title + link].
+// Inference competitors for the "watch" button: [name, search word, pattern checked on title + link].
 // Many names are also plain words ("together", "modal"), so every hit must match the stricter pattern.
 const COMPETITORS = [
   ["Baseten", "baseten", /baseten/i],
