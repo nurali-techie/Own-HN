@@ -39,7 +39,19 @@
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
   #status { color: var(--muted); font-size: 14px; margin: 14px 2px 8px; }
   ol { list-style: none; margin: 0; padding: 0; }
-  li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  li.story { position: relative; margin-bottom: 8px; border-radius: 10px; overflow: hidden; }
+  li.story .card {
+    position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; touch-action: pan-y; transition: transform 0.2s;
+  }
+  li.story .card.dragging { transition: none; user-select: none; -webkit-user-select: none; }
+  /* Strip revealed behind the card while swiping: left = mark read, right = mark unread. */
+  li.story .swipe-bg {
+    position: absolute; inset: 0; display: flex; align-items: center; padding: 0 18px;
+    font-weight: 600; font-size: 14px; border-radius: 10px; visibility: hidden;
+  }
+  li.story .swipe-bg.to-read { justify-content: flex-end; background: #d9d9d0; color: #555; visibility: visible; }
+  li.story .swipe-bg.to-unread { justify-content: flex-start; background: var(--accent); color: var(--accent-text); visibility: visible; }
   li a.t { color: var(--text); text-decoration: none; font-weight: 600; }
   [hidden] { display: none !important; }
   button.more {
@@ -47,7 +59,7 @@
     border: 1px dashed var(--line); border-radius: 8px; background: none; color: var(--muted);
   }
   /* Dim a read story but keep its summary easy to read. */
-  li.read > :not(.summary) { opacity: 0.5; }
+  li.read .card > :not(.summary) { opacity: 0.5; }
   li.read a.t { font-weight: 400; }
   .dom { color: var(--muted); font-size: 13px; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
@@ -282,7 +294,7 @@ async function summarize(h) {
 
 function showSummary(li, text, isError, source) {
   let box = li.querySelector(".summary");
-  if (!box) { box = document.createElement("div"); li.appendChild(box); }
+  if (!box) { box = document.createElement("div"); (li.querySelector(".card") || li).appendChild(box); }
   box.className = "summary" + (isError ? " err" : "");
   box.replaceChildren();
   let lines = isError ? [] : text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -398,6 +410,59 @@ function loadRead() {
   } catch { return {}; }
 }
 
+function markUnread(id, li) {
+  li.classList.remove("read");
+  try {
+    const all = loadRead();
+    delete all[id];
+    localStorage.setItem(READ_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+// Swipe a story card left to mark it read, right to mark it unread. Pointer events cover
+// finger, mouse and trackpad; touch-action: pan-y leaves vertical scrolling to the browser.
+function addSwipe(li, card, id) {
+  const bg = document.createElement("div");
+  bg.className = "swipe-bg";
+  li.prepend(bg);
+  let startX = 0, startY = 0, dx = 0, state = "idle"; // idle | pending | swiping
+  let swiped = false; // set after a swipe so the release doesn't also open a link
+
+  card.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    startX = e.clientX; startY = e.clientY; dx = 0; state = "pending"; swiped = false;
+  });
+  card.addEventListener("pointermove", (e) => {
+    if (state === "idle") return;
+    const x = e.clientX - startX, y = e.clientY - startY;
+    if (state === "pending") {
+      if (Math.abs(y) > 10 && Math.abs(y) > Math.abs(x)) { state = "idle"; return; } // vertical scroll
+      if (Math.abs(x) < 10) return;
+      state = "swiping";
+      card.classList.add("dragging");
+      card.setPointerCapture(e.pointerId);
+    }
+    dx = x;
+    card.style.transform = `translateX(${dx}px)`;
+    bg.className = "swipe-bg " + (dx < 0 ? "to-read" : "to-unread");
+    bg.textContent = dx < 0 ? "Read" : "Unread";
+  });
+  const end = () => {
+    if (state === "swiping") {
+      swiped = true;
+      if (Math.abs(dx) > card.offsetWidth / 3) dx < 0 ? markRead(id, li) : markUnread(id, li);
+    }
+    state = "idle";
+    card.classList.remove("dragging");
+    card.style.transform = "";
+    setTimeout(() => { if (state === "idle") bg.className = "swipe-bg"; }, 200);
+  };
+  card.addEventListener("pointerup", end);
+  card.addEventListener("pointercancel", end);
+  card.addEventListener("click", (e) => { if (swiped) { e.preventDefault(); e.stopPropagation(); swiped = false; } }, true);
+  card.addEventListener("dragstart", (e) => e.preventDefault()); // stop the mouse from dragging links
+}
+
 function markRead(id, li) {
   li.classList.add("read");
   try {
@@ -411,23 +476,28 @@ function render(list, hits) {
   const read = loadRead();
   const sums = loadSummaries();
   list.replaceChildren();
-  for (const h of hits) {
+  // Unread stories first, then read ones; each group stays sorted by points (hits already are).
+  const ordered = [...hits.filter((h) => !read[h.objectID]), ...hits.filter((h) => read[h.objectID])];
+  for (const h of ordered) {
     const hn = "https://news.ycombinator.com/item?id=" + h.objectID;
     const li = document.createElement("li");
-    if (read[h.objectID]) li.className = "read";
+    li.className = read[h.objectID] ? "story read" : "story";
+    const card = document.createElement("div");
+    card.className = "card";
+    li.appendChild(card);
 
     const a = document.createElement("a");
     a.className = "t";
     a.href = h.url || hn;
     a.textContent = h.title;
-    li.appendChild(a);
+    card.appendChild(a);
 
     const d = domain(h.url);
     if (d) {
       const s = document.createElement("span");
       s.className = "dom";
       s.textContent = " (" + d + ")";
-      li.appendChild(s);
+      card.appendChild(s);
     }
 
     const meta = document.createElement("div");
@@ -479,7 +549,7 @@ function render(list, hits) {
       meta.append(" ", hot);
     }
     meta.append(` · ${ago(h.created_at_i)} · `, c, " · ", sb);
-    li.appendChild(meta);
+    card.appendChild(meta);
     if (saved) {
       showSummary(li, saved.text, false, saved.source);
       setToggle(true); // saved summaries start collapsed after a refresh
@@ -487,6 +557,7 @@ function render(list, hits) {
 
     // Opening the article or the comments marks the story as read.
     li.addEventListener("click", (e) => { if (e.target.closest("a")) markRead(h.objectID, li); });
+    addSwipe(li, card, h.objectID);
     list.appendChild(li);
   }
 }
