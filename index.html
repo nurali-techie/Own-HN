@@ -78,6 +78,7 @@
   .summary .note { margin: 6px 0 0; font-size: 12px; color: var(--muted); font-style: italic; }
   .summary.err { background: var(--bg); border-left-color: var(--line); color: var(--muted); }
   .pts { color: var(--accent); font-weight: 700; }
+  .comp { background: #e8eefc; color: #2848a8; border-radius: 999px; padding: 0 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
   .hot { background: #ffe3cc; color: #b34700; border-radius: 999px; padding: 0 6px; font-weight: 600; font-size: 12px; }
 </style>
 </head>
@@ -109,6 +110,7 @@ const PRESETS = [
   { id: "500", label: "500+", min: 500, max: null, techOnly: true },
   { id: "ai", label: "AI 10+", min: 10, max: null, q: "ai" },
   { id: "ai20", label: "AI 20+", min: 20, max: null, q: "ai" },
+  { id: "eyes", label: "Keep eyes", min: 1, max: null, competitors: true, hours: 7 * 24 },
 ];
 const DEFAULT_ID = "500";
 
@@ -135,8 +137,77 @@ function select(p) {
   run(p);
 }
 
+// Inference competitors for the "Keep eyes" button: [name, search word, pattern checked on title + link].
+// Many names are also plain words ("together", "modal"), so every hit must match the stricter pattern.
+const COMPETITORS = [
+  ["Baseten", "baseten", /baseten/i],
+  ["Fireworks AI", "fireworks", /fireworks[\s.-]?ai/i],
+  ["Together AI", "together", /together[\s.-]?ai|together\.xyz/i],
+  ["Replicate", "replicate", /replicate\.com|replicate (ai|api|inc)\b/i],
+  ["Modal", "modal", /modal\.com|modal labs/i],
+  ["DeepInfra", "deepinfra", /deepinfra/i],
+  ["Fal.ai", "fal", /\bfal[\s.-]ai\b/i],
+  ["Anyscale", "anyscale", /anyscale/i],
+  ["BentoML", "bentoml", /bentoml|bentocloud/i],
+  ["Friendli AI", "friendli", /friendli/i],
+  ["Predibase", "predibase", /predibase/i],
+  ["Hyperbolic", "hyperbolic", /hyperbolic\.xyz|hyperbolic (labs|ai)\b/i],
+  ["Novita AI", "novita", /novita[\s.-]?ai/i],
+  ["Featherless", "featherless", /featherless/i],
+  ["Parasail", "parasail", /parasail\.io|parasail ai\b/i],
+  ["Inference.net", "inference.net", /inference\.net/i],
+  ["Kluster.ai", "kluster", /kluster[\s.-]?ai/i],
+  ["Inferless", "inferless", /inferless/i],
+  ["Mystic AI", "mystic", /mystic[\s.-]ai\b/i],
+  ["Runware", "runware", /runware/i],
+  ["Chutes", "chutes", /chutes[\s.-]ai\b/i],
+  ["Clarifai", "clarifai", /clarifai/i],
+  ["GMI Cloud", "gmi", /gmi[\s.-]?cloud/i],
+  ["SiliconFlow", "siliconflow", /siliconflow/i],
+  ["Hugging Face", "hugging face inference", /hugging\s?face.*(inference|endpoint)|(inference|endpoint).*hugging\s?face/i],
+  ["Nebius", "nebius", /nebius/i],
+  ["RunPod", "runpod", /runpod/i],
+  ["Cerebrium", "cerebrium", /cerebrium/i],
+  ["Groq", "groq", /\bgroq\b/i],
+  ["Cerebras", "cerebras", /cerebras/i],
+  ["SambaNova", "sambanova", /sambanova/i],
+  ["Etched", "etched", /etched\.(com|ai)|etched ai\b|etched.*sohu|\bsohu\b.*(chip|asic)/i],
+  ["d-Matrix", "d-matrix", /d-matrix/i],
+  ["Positron", "positron", /positron\.ai|positron ai\b/i],
+  ["OctoAI", "octoai", /octo[\s.-]?ai/i],
+  ["Lepton AI", "lepton", /lepton[\s.-]?ai/i],
+];
+
+// One small search per company, in parallel; each hit gets h.competitors = matching names.
+async function fetchCompetitors(since) {
+  const found = new Map();
+  await Promise.all(COMPETITORS.map(async ([name, q, re]) => {
+    const p = new URLSearchParams({
+      tags: TAGS,
+      numericFilters: `created_at_i>${since}`,
+      query: q,
+      queryType: "prefixNone",
+      typoTolerance: "false", // otherwise "groq" also finds "Grok" and "modal" finds "model"
+      restrictSearchableAttributes: "title,url",
+      hitsPerPage: 1000,
+      attributesToRetrieve: "title,url,points,num_comments,created_at_i,objectID",
+      attributesToHighlight: "",
+    });
+    const res = await fetch(API + "?" + p);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    for (const h of (await res.json()).hits) {
+      if (!re.test(h.title + " " + (h.url || ""))) continue;
+      const hit = found.get(h.objectID) || { ...h, competitors: [] };
+      hit.competitors.push(name);
+      found.set(h.objectID, hit);
+    }
+  }));
+  return [...found.values()].sort((a, b) => b.points - a.points);
+}
+
 async function fetchAll(f) {
-  const since = Math.floor(Date.now() / 1000) - HOURS * 3600;
+  const since = Math.floor(Date.now() / 1000) - (f.hours || HOURS) * 3600;
+  if (f.competitors) return fetchCompetitors(since);
   const filters = [`points>=${f.min}`, `created_at_i>${since}`];
   if (f.max !== null) filters.push(`points<=${f.max}`);
   const hits = [];
@@ -499,6 +570,12 @@ function render(list, hits) {
       s.textContent = " (" + d + ")";
       card.appendChild(s);
     }
+    for (const name of h.competitors || []) {
+      const tag = document.createElement("span");
+      tag.className = "comp";
+      tag.textContent = name;
+      card.append(" ", tag);
+    }
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -578,9 +655,11 @@ async function run(f) {
     more.hidden = hidden.length === 0;
     more.textContent = `Show ${hidden.length} non-tech ${hidden.length === 1 ? "story" : "stories"}`;
     const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
+    const hrs = f.hours || HOURS;
+    const span = hrs % 24 === 0 && hrs > 24 ? `${hrs / 24} days` : `${hrs} hrs`;
     $("status").textContent = hits.length
-      ? `${n(hits.length)} in the last ${HOURS} hrs, most points first`
-      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${HOURS} hrs.`;
+      ? `${n(hits.length)} in the last ${span}, most points first`
+      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span}.`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
