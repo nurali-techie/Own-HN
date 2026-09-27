@@ -468,9 +468,9 @@ function isTech(h) {
 }
 
 // Stories you opened are remembered on this device so they can be dimmed.
-// Only the last 24 hrs are ever shown, so anything older than 2 days is dropped.
+// Kept 7 days so a story stays read as it moves between buttons and across the 7-day watch list.
 const READ_KEY = "own-hn-read";
-const READ_TTL = 2 * 24 * 3600 * 1000;
+const READ_TTL = 7 * 24 * 3600 * 1000;
 
 function loadRead() {
   try {
