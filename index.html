@@ -37,6 +37,10 @@
     border-radius: 8px; padding: 10px 12px; font-size: 16px; text-align: left;
   }
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .chips button { display: flex; justify-content: space-between; align-items: center; }
+  .chips .count { background: #ffe3cc; color: #b34700; border-radius: 999px; padding: 0 8px; font-size: 13px; font-weight: 600; }
+  .chips button.on .count { background: rgba(255, 255, 255, 0.3); color: inherit; }
+  header .tools { display: flex; gap: 16px; }
   #status { color: var(--muted); font-size: 14px; margin: 14px 2px 8px; }
   ol { list-style: none; margin: 0; padding: 0; }
   li.story { position: relative; margin-bottom: 8px; border-radius: 10px; overflow: hidden; }
@@ -83,7 +87,7 @@
 </style>
 </head>
 <body>
-<header>Own-HN <button id="keyBtn" type="button">⚙ API key</button></header>
+<header>Own-HN <span class="tools"><button id="refreshBtn" type="button">↻ Refresh</button><button id="keyBtn" type="button">⚙ API key</button></span></header>
 <main>
   <div class="card"><div class="chips" id="chips"></div></div>
 
@@ -120,10 +124,38 @@ const chipsEl = $("chips");
 PRESETS.forEach((p) => {
   const b = document.createElement("button");
   b.type = "button";
-  b.textContent = p.label;
+  const count = document.createElement("span");
+  count.className = "count";
+  count.hidden = true;
+  b.append(p.label, count);
   b.onclick = () => select(p);
   chipsEl.appendChild(b);
 });
+
+// Unread counts on the buttons. idsByPreset holds each button's visible story IDs from its last
+// load, so marking a story read or unread updates every count without another search.
+const idsByPreset = {};
+
+function visibleIds(p, all) {
+  return (p.techOnly ? all.filter(isTech) : all).map((h) => h.objectID);
+}
+
+function updateCounts() {
+  const read = loadRead();
+  PRESETS.forEach((p, i) => {
+    const el = chipsEl.children[i].querySelector(".count");
+    const n = idsByPreset[p.id] ? idsByPreset[p.id].filter((id) => !read[id]).length : 0;
+    el.textContent = n;
+    el.hidden = n === 0; // no badge when there is nothing unread
+  });
+}
+
+async function loadCounts() {
+  await Promise.all(PRESETS.map(async (p) => {
+    try { idsByPreset[p.id] = visibleIds(p, await fetchAll(p)); } catch {} // a failed count just stays hidden
+  }));
+  updateCounts();
+}
 
 // The selected filter lives in the URL so a refresh or bookmark shows the same view.
 function fromUrl() {
@@ -131,7 +163,11 @@ function fromUrl() {
   return PRESETS.find((p) => p.id === id) || PRESETS.find((p) => p.id === DEFAULT_ID);
 }
 
+let current = null;
+let lastLoad = 0;
+
 function select(p) {
+  current = p;
   history.replaceState(null, "", "?f=" + p.id);
   [...chipsEl.children].forEach((b, i) => b.classList.toggle("on", PRESETS[i] === p));
   run(p);
@@ -488,6 +524,7 @@ function markUnread(id, li) {
     delete all[id];
     localStorage.setItem(READ_KEY, JSON.stringify(all));
   } catch {}
+  updateCounts();
 }
 
 // Swipe a story card left to mark it read, right to mark it unread. Pointer events cover
@@ -541,6 +578,7 @@ function markRead(id, li) {
     all[id] = Date.now();
     localStorage.setItem(READ_KEY, JSON.stringify(all));
   } catch {}
+  updateCounts();
 }
 
 function render(list, hits) {
@@ -646,6 +684,8 @@ async function run(f) {
   try {
     const all = await fetchAll(f);
     if (id !== runId) return; // a newer search started meanwhile
+    idsByPreset[f.id] = visibleIds(f, all);
+    updateCounts();
     const hits = f.techOnly ? all.filter(isTech) : all;
     const hidden = f.techOnly ? all.filter((h) => !isTech(h)) : [];
     render($("list"), hits);
@@ -665,7 +705,7 @@ async function run(f) {
     $("list").replaceChildren();
     $("hiddenList").replaceChildren();
     $("moreBtn").hidden = true;
-    $("status").textContent = "Could not load news (" + e.message + "). Pull to refresh.";
+    $("status").textContent = "Could not load news (" + e.message + "). Tap ↻ Refresh to try again.";
   }
 }
 
@@ -677,7 +717,22 @@ $("moreBtn").onclick = () => {
   $("moreBtn").textContent = $("moreBtn").textContent.replace(/^(Show|Hide)/, list.hidden ? "Show" : "Hide");
 };
 
+function refreshAll() {
+  lastLoad = Date.now();
+  run(current);
+  loadCounts();
+}
+
+$("refreshBtn").onclick = refreshAll;
+
+// The Home Screen app has no pull-to-refresh, so reload when coming back after 10+ minutes away.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && Date.now() - lastLoad > 10 * 60 * 1000) refreshAll();
+});
+
 select(fromUrl());
+lastLoad = Date.now();
+loadCounts();
 </script>
 </body>
 </html>
