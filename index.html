@@ -753,11 +753,9 @@ async function run(f) {
     const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
     const hrs = f.hours || HOURS;
     const span = hrs % 24 === 0 && hrs > 24 ? `${hrs / 24} days` : `${hrs} hrs`;
-    const mins = Math.round((Date.now() - session.at) / 60000);
-    const updated = mins < 1 ? "updated just now" : `updated ${mins} min ago`;
     $("status").textContent = hits.length
-      ? `${n(hits.length)} in the last ${span}, most points first · ${updated}`
-      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span} · ${updated}`;
+      ? `${n(hits.length)} in the last ${span}, most points first`
+      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span}.`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
