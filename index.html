@@ -136,6 +136,23 @@ PRESETS.forEach((p) => {
 // load, so marking a story read or unread updates every count without another search.
 const idsByPreset = {};
 
+// The points buttons (100+ … 500+) share one pool: the stories they loaded at the edition start.
+// Each button shows the pool's stories whose latest points fall in its band, so a story moves from
+// 100+ to 200+ as it gains points (its read mark goes with it), but none join during the day.
+const isBand = (p) => !p.q && !p.competitors;
+
+function storiesFor(p) {
+  if (!isBand(p)) return session.results[p.id] || [];
+  const pool = new Map();
+  for (const b of PRESETS) if (isBand(b)) for (const h of session.results[b.id] || []) pool.set(h.objectID, h);
+  return [...pool.values()].filter((h) => h.points >= p.min && (p.max === null || h.points <= p.max));
+}
+
+// Recompute every loaded button's visible story IDs, e.g. after points change.
+function recomputeIds() {
+  for (const p of PRESETS) if (session.results[p.id]) idsByPreset[p.id] = visibleIds(p, storiesFor(p));
+}
+
 function visibleIds(p, all) {
   return (p.techOnly ? all.filter(isTech) : all).map((h) => h.objectID);
 }
@@ -173,7 +190,7 @@ function loadSession() {
     const saved = JSON.parse(localStorage.getItem(SESSION_KEY));
     if (saved && saved.at === currentEdition()) session = saved;
   } catch {}
-  for (const p of PRESETS) if (session.results[p.id]) idsByPreset[p.id] = visibleIds(p, session.results[p.id]);
+  recomputeIds();
 }
 
 function saveSession() {
@@ -188,7 +205,7 @@ function getResults(p) {
       .then((hits) => {
         if (session.at === at) { // ignore results that arrive after a newer edition started
           session.results[p.id] = hits;
-          idsByPreset[p.id] = visibleIds(p, hits);
+          recomputeIds();
           updateCounts();
           saveSession();
         }
@@ -200,8 +217,42 @@ function getResults(p) {
   return pending[p.id];
 }
 
+// Stories stay fixed for the edition, but their points and comment counts are updated to the
+// latest values when the app is opened or returned to, at most every POINTS_EVERY. One request
+// covers every story in the edition (HN search can match many story IDs at once).
+const POINTS_EVERY = 30 * 60 * 1000;
+
+async function refreshPoints() {
+  if (Date.now() - (session.pointsAt || session.fetchedAt) < POINTS_EVERY) return;
+  const stories = Object.values(session.results).flat();
+  const ids = [...new Set(stories.map((h) => h.objectID))];
+  if (!ids.length) return;
+  const latest = {};
+  for (let i = 0; i < ids.length; i += 100) { // keep each request's URL short
+    const p = new URLSearchParams({
+      // "story" too: each story's comments also carry its story_<id> tag
+      tags: "story,(" + ids.slice(i, i + 100).map((id) => "story_" + id).join(",") + ")",
+      hitsPerPage: 1000,
+      attributesToRetrieve: "points,num_comments,objectID",
+      attributesToHighlight: "",
+    });
+    const res = await fetch(API + "?" + p);
+    if (!res.ok) return; // keep the older points; try again next time
+    for (const h of (await res.json()).hits) latest[h.objectID] = h;
+  }
+  for (const h of stories) {
+    const l = latest[h.objectID];
+    if (l) { h.points = l.points; h.num_comments = l.num_comments; }
+  }
+  session.pointsAt = Date.now();
+  saveSession();
+  recomputeIds();
+  updateCounts();
+  run(current); // show the new points (a points button may gain or lose stories that moved band)
+}
+
 function startSession(first) {
-  session = { at: currentEdition(), fetchedAt: Date.now(), results: {} };
+  session = { at: currentEdition(), fetchedAt: Date.now(), pointsAt: Date.now(), results: {} };
   for (const id in pending) delete pending[id];
   // The shown button is searched first, so its list appears as fast as before; the rest fill in behind it.
   getResults(first).catch(() => {}); // run() reports this one's errors
@@ -728,7 +779,7 @@ function render(list, hits) {
     const s2 = makeSumLink("s2", "S-140");
     meta.append(pts);
     // Hot: gaining points fast, averaged over the story's age (at least 1 hr to avoid early spikes).
-    const perHour = h.points / Math.max(((session.fetchedAt || Date.now()) / 1000 - h.created_at_i) / 3600, 1);
+    const perHour = h.points / Math.max(((session.pointsAt || session.fetchedAt || Date.now()) / 1000 - h.created_at_i) / 3600, 1);
     if (perHour >= HOT_PER_HOUR) {
       const hot = document.createElement("span");
       hot.className = "hot";
@@ -752,7 +803,8 @@ async function run(f) {
   const id = ++runId;
   $("status").textContent = "Loading…";
   try {
-    const all = await getResults(f);
+    await getResults(f);
+    const all = [...storiesFor(f)].sort((a, b) => b.points - a.points); // latest points first
     if (id !== runId) return; // a newer search started meanwhile
     const hits = f.techOnly ? all.filter(isTech) : all;
     const hidden = f.techOnly ? all.filter((h) => !isTech(h)) : [];
@@ -796,12 +848,14 @@ document.addEventListener("visibilitychange", () => {
   const missing = PRESETS.filter((p) => !session.results[p.id]);
   for (const p of missing) getResults(p).catch(() => {});
   if (missing.includes(current)) run(current);
+  refreshPoints().catch(() => {});
 });
 
 loadSession();
 if (!session.at) startSession(fromUrl());
 select(fromUrl());
 updateCounts();
+refreshPoints().catch(() => {});
 </script>
 </body>
 </html>
