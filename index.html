@@ -87,7 +87,7 @@
 </style>
 </head>
 <body>
-<header>Own-HN <span class="tools"><button id="refreshBtn" type="button">↻ Refresh</button><button id="keyBtn" type="button">⚙ API key</button></span></header>
+<header>Own-HN <span class="tools"><button id="keyBtn" type="button">⚙ API key</button></span></header>
 <main>
   <div class="card"><div class="chips" id="chips"></div></div>
 
@@ -150,18 +150,28 @@ function updateCounts() {
   });
 }
 
-// Session: every button's stories are fetched once and reused for 30 minutes, so switching buttons
-// and coming back from an article don't search HN again. It is also saved on the device, so a
-// reload by iOS in the middle of a session reuses it instead of searching again.
+// Daily edition: at 7:00 AM IST a new edition starts. The first open after that fetches every
+// button's stories once; they are saved on the device and reused all day, so no new stories
+// appear until the next edition. Each edition covers stories posted up to LAG_HOURS before
+// 7 AM, so every story has had time to collect points, and each story lands in exactly one edition.
 const SESSION_KEY = "own-hn-session";
-const SESSION_TTL = 30 * 60 * 1000;
-let session = { at: 0, results: {} }; // results: preset id -> stories
+const EDITION_HOUR_IST = 7;
+const LAG_HOURS = 6;
+const IST_OFFSET = 5.5 * 3600 * 1000; // IST is UTC+5:30 all year
+let session = { at: 0, fetchedAt: 0, results: {} }; // at: edition start (ms); results: preset id -> stories
 const pending = {}; // preset id -> search in progress, so a button is never searched twice at once
+
+// Start of the edition in effect now: the latest 7:00 AM IST that has passed, whatever the phone's time zone.
+function currentEdition(now = Date.now()) {
+  const istMidnight = Math.floor((now + IST_OFFSET) / 86400000) * 86400000 - IST_OFFSET;
+  const edition = istMidnight + EDITION_HOUR_IST * 3600 * 1000;
+  return edition > now ? edition - 86400000 : edition;
+}
 
 function loadSession() {
   try {
     const saved = JSON.parse(localStorage.getItem(SESSION_KEY));
-    if (saved && Date.now() - saved.at < SESSION_TTL) session = saved;
+    if (saved && saved.at === currentEdition()) session = saved;
   } catch {}
   for (const p of PRESETS) if (session.results[p.id]) idsByPreset[p.id] = visibleIds(p, session.results[p.id]);
 }
@@ -174,9 +184,9 @@ function getResults(p) {
   if (session.results[p.id]) return Promise.resolve(session.results[p.id]);
   if (!pending[p.id]) {
     const at = session.at;
-    const search = fetchAll(p)
+    const search = fetchAll(p, at)
       .then((hits) => {
-        if (session.at === at) { // ignore results that arrive after a newer session started
+        if (session.at === at) { // ignore results that arrive after a newer edition started
           session.results[p.id] = hits;
           idsByPreset[p.id] = visibleIds(p, hits);
           updateCounts();
@@ -191,7 +201,7 @@ function getResults(p) {
 }
 
 function startSession(first) {
-  session = { at: Date.now(), results: {} };
+  session = { at: currentEdition(), fetchedAt: Date.now(), results: {} };
   for (const id in pending) delete pending[id];
   // The shown button is searched first, so its list appears as fast as before; the rest fill in behind it.
   getResults(first).catch(() => {}); // run() reports this one's errors
@@ -255,12 +265,12 @@ const COMPETITORS = [
 ];
 
 // One small search per company, in parallel; each hit gets h.competitors = matching names.
-async function fetchCompetitors(since) {
+async function fetchCompetitors(since, until) {
   const found = new Map();
   await Promise.all(COMPETITORS.map(async ([name, q, re]) => {
     const p = new URLSearchParams({
       tags: TAGS,
-      numericFilters: `created_at_i>${since}`,
+      numericFilters: `created_at_i>${since},created_at_i<=${until}`,
       query: q,
       queryType: "prefixNone",
       typoTolerance: "false", // otherwise "groq" also finds "Grok" and "modal" finds "model"
@@ -281,10 +291,12 @@ async function fetchCompetitors(since) {
   return [...found.values()].sort((a, b) => b.points - a.points);
 }
 
-async function fetchAll(f) {
-  const since = Math.floor(Date.now() / 1000) - (f.hours || HOURS) * 3600;
-  if (f.competitors) return fetchCompetitors(since);
-  const filters = [`points>=${f.min}`, `created_at_i>${since}`];
+// Stories posted in the button's window (24 hrs, or 7 days for watch) ending LAG_HOURS before the edition.
+async function fetchAll(f, edition) {
+  const until = Math.floor(edition / 1000) - LAG_HOURS * 3600;
+  const since = until - (f.hours || HOURS) * 3600;
+  if (f.competitors) return fetchCompetitors(since, until);
+  const filters = [`points>=${f.min}`, `created_at_i>${since}`, `created_at_i<=${until}`];
   if (f.max !== null) filters.push(`points<=${f.max}`);
   const hits = [];
   for (let page = 0; ; page++) {
@@ -716,7 +728,7 @@ function render(list, hits) {
     const s2 = makeSumLink("s2", "S-140");
     meta.append(pts);
     // Hot: gaining points fast, averaged over the story's age (at least 1 hr to avoid early spikes).
-    const perHour = h.points / Math.max((Date.now() / 1000 - h.created_at_i) / 3600, 1);
+    const perHour = h.points / Math.max(((session.fetchedAt || Date.now()) / 1000 - h.created_at_i) / 3600, 1);
     if (perHour >= HOT_PER_HOUR) {
       const hot = document.createElement("span");
       hot.className = "hot";
@@ -751,17 +763,16 @@ async function run(f) {
     more.hidden = hidden.length === 0;
     more.textContent = `Show ${hidden.length} non-tech ${hidden.length === 1 ? "story" : "stories"}`;
     const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
-    const hrs = f.hours || HOURS;
-    const span = hrs % 24 === 0 && hrs > 24 ? `${hrs / 24} days` : `${hrs} hrs`;
+    const span = f.hours ? ` (${f.hours / 24} days)` : "";
     $("status").textContent = hits.length
-      ? `${n(hits.length)} in the last ${span}, most points first`
-      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span}.`;
+      ? `${n(hits.length)} in today's edition${span}, most points first`
+      : `No ${f.techOnly ? "tech " : ""}stories in today's edition${span}.`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
     $("hiddenList").replaceChildren();
     $("moreBtn").hidden = true;
-    $("status").textContent = "Could not load news (" + e.message + "). Tap ↻ Refresh to try again.";
+    $("status").textContent = "Could not load news (" + e.message + "). It will retry when you reopen the app.";
   }
 }
 
@@ -773,16 +784,18 @@ $("moreBtn").onclick = () => {
   $("moreBtn").textContent = $("moreBtn").textContent.replace(/^(Show|Hide)/, list.hidden ? "Show" : "Hide");
 };
 
-function refreshAll() {
-  startSession(current);
-  run(current);
-}
-
-$("refreshBtn").onclick = refreshAll;
-
-// A new session starts when coming back after the session has expired (30+ minutes).
+// Coming back to the app: load the new edition once 7 AM IST has passed; otherwise only retry
+// buttons whose load failed earlier (for example with no network). A loaded edition is never re-fetched.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && Date.now() - session.at > SESSION_TTL) refreshAll();
+  if (document.visibilityState !== "visible") return;
+  if (session.at !== currentEdition()) {
+    startSession(current);
+    run(current);
+    return;
+  }
+  const missing = PRESETS.filter((p) => !session.results[p.id]);
+  for (const p of missing) getResults(p).catch(() => {});
+  if (missing.includes(current)) run(current);
 });
 
 loadSession();
