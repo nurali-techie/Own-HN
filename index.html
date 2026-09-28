@@ -150,11 +150,52 @@ function updateCounts() {
   });
 }
 
-async function loadCounts() {
-  await Promise.all(PRESETS.map(async (p) => {
-    try { idsByPreset[p.id] = visibleIds(p, await fetchAll(p)); } catch {} // a failed count just stays hidden
-  }));
-  updateCounts();
+// Session: every button's stories are fetched once and reused for 30 minutes, so switching buttons
+// and coming back from an article don't search HN again. It is also saved on the device, so a
+// reload by iOS in the middle of a session reuses it instead of searching again.
+const SESSION_KEY = "own-hn-session";
+const SESSION_TTL = 30 * 60 * 1000;
+let session = { at: 0, results: {} }; // results: preset id -> stories
+const pending = {}; // preset id -> search in progress, so a button is never searched twice at once
+
+function loadSession() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SESSION_KEY));
+    if (saved && Date.now() - saved.at < SESSION_TTL) session = saved;
+  } catch {}
+  for (const p of PRESETS) if (session.results[p.id]) idsByPreset[p.id] = visibleIds(p, session.results[p.id]);
+}
+
+function saveSession() {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch {}
+}
+
+function getResults(p) {
+  if (session.results[p.id]) return Promise.resolve(session.results[p.id]);
+  if (!pending[p.id]) {
+    const at = session.at;
+    const search = fetchAll(p)
+      .then((hits) => {
+        if (session.at === at) { // ignore results that arrive after a newer session started
+          session.results[p.id] = hits;
+          idsByPreset[p.id] = visibleIds(p, hits);
+          updateCounts();
+          saveSession();
+        }
+        return hits;
+      })
+      .finally(() => { if (pending[p.id] === search) delete pending[p.id]; });
+    pending[p.id] = search;
+  }
+  return pending[p.id];
+}
+
+function startSession(first) {
+  session = { at: Date.now(), results: {} };
+  for (const id in pending) delete pending[id];
+  // The shown button is searched first, so its list appears as fast as before; the rest fill in behind it.
+  getResults(first).catch(() => {}); // run() reports this one's errors
+  for (const p of PRESETS) if (p !== first) getResults(p).catch(() => {}); // a failed count just stays hidden
 }
 
 // The selected filter lives in the URL so a refresh or bookmark shows the same view.
@@ -164,7 +205,6 @@ function fromUrl() {
 }
 
 let current = null;
-let lastLoad = 0;
 
 function select(p) {
   current = p;
@@ -700,10 +740,8 @@ async function run(f) {
   const id = ++runId;
   $("status").textContent = "Loading…";
   try {
-    const all = await fetchAll(f);
+    const all = await getResults(f);
     if (id !== runId) return; // a newer search started meanwhile
-    idsByPreset[f.id] = visibleIds(f, all);
-    updateCounts();
     const hits = f.techOnly ? all.filter(isTech) : all;
     const hidden = f.techOnly ? all.filter((h) => !isTech(h)) : [];
     render($("list"), hits);
@@ -715,9 +753,11 @@ async function run(f) {
     const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
     const hrs = f.hours || HOURS;
     const span = hrs % 24 === 0 && hrs > 24 ? `${hrs / 24} days` : `${hrs} hrs`;
+    const mins = Math.round((Date.now() - session.at) / 60000);
+    const updated = mins < 1 ? "updated just now" : `updated ${mins} min ago`;
     $("status").textContent = hits.length
-      ? `${n(hits.length)} in the last ${span}, most points first`
-      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span}.`;
+      ? `${n(hits.length)} in the last ${span}, most points first · ${updated}`
+      : `No ${f.techOnly ? "tech " : ""}stories match in the last ${span} · ${updated}`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
@@ -736,21 +776,21 @@ $("moreBtn").onclick = () => {
 };
 
 function refreshAll() {
-  lastLoad = Date.now();
+  startSession(current);
   run(current);
-  loadCounts();
 }
 
 $("refreshBtn").onclick = refreshAll;
 
-// The Home Screen app has no pull-to-refresh, so reload when coming back after 10+ minutes away.
+// A new session starts when coming back after the session has expired (30+ minutes).
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && Date.now() - lastLoad > 10 * 60 * 1000) refreshAll();
+  if (document.visibilityState === "visible" && Date.now() - session.at > SESSION_TTL) refreshAll();
 });
 
+loadSession();
+if (!session.at) startSession(fromUrl());
 select(fromUrl());
-lastLoad = Date.now();
-loadCounts();
+updateCounts();
 </script>
 </body>
 </html>
