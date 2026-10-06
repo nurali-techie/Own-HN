@@ -418,7 +418,7 @@ function saveSummary(id, text, source) {
   } catch {}
 }
 
-// S1 is the quick summary; S2 is the longer one, asked for separately (it reads the article again).
+// Prompt for the Summarize link (kind s1, about 75 words).
 const SUMMARY_FORMATS = {
   s1:
     `for a busy engineer skimming Hacker News. Keep it short: 75 words or fewer in total. ` +
@@ -427,13 +427,6 @@ const SUMMARY_FORMATS = {
     `the reader has already seen the title, so never restate it>\n` +
     `- <exactly 3 bullets, at most 12 words each, with the most interesting specifics>\n` +
     `Why it matters: <one sentence, at most 15 words>`,
-  s2:
-    `for an engineer who wants the details. 140 words or fewer in total. ` +
-    `Use exactly this format, no preamble, no markdown other than "- ":\n` +
-    `TL;DR: <one or two sentences, at most 30 words, giving the key facts or takeaway the title doesn't already say; ` +
-    `the reader has already seen the title, so never restate it>\n` +
-    `- <exactly 4 bullets, at most 18 words each: concrete specifics such as numbers, names, how it works, caveats>\n` +
-    `Why it matters: <one or two sentences, at most 35 words in total>`,
 };
 
 async function askClaude(body) {
@@ -512,7 +505,7 @@ async function summarize(h, format) {
   return { text, source: "comments" };
 }
 
-// kind is "s1" or "s2"; each has its own box under the story.
+// kind names the summary box under the story (only "s1", the Summarize link, today).
 function showSummary(li, kind, text, isError, source) {
   let box = li.querySelector(`.summary[data-kind="${kind}"]`);
   if (!box) {
@@ -741,14 +734,12 @@ function render(list, hits) {
     const c = document.createElement("a");
     c.href = hn;
     c.textContent = (h.num_comments || 0) + " cmts"; // short, like "pts"
-    // Two links, S-75 (short, kind s1) and S-140 (long, kind s2). Each asks Claude once, then shows or hides its saved
-    // summary; a ✓ means it is saved on this device, so opening it again costs nothing.
+    // Summarize link: asks Claude once, then shows or hides the saved summary; ✓ means it is saved on this device.
     const makeSumLink = (kind, label) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "sum";
-      // S1 keeps the older cache key; the long one's key names its length, so older, longer ones aren't reused.
-      const key = kind === "s1" ? h.objectID : h.objectID + ":s140";
+      const key = h.objectID;
       const box = () => li.querySelector(`.summary[data-kind="${kind}"]`);
       const setLabel = () => { btn.textContent = sums[key] || (box() && !box().classList.contains("err")) ? label + " ✓" : label; };
       btn.onclick = async () => {
@@ -775,8 +766,7 @@ function render(list, hits) {
       setLabel();
       return btn;
     };
-    const s1 = makeSumLink("s1", "S-75"); // labels say the word limit
-    const s2 = makeSumLink("s2", "S-140");
+    const s1 = makeSumLink("s1", "Summarize");
     meta.append(pts);
     // Hot: gaining points fast, averaged over the story's age (at least 1 hr to avoid early spikes).
     const perHour = h.points / Math.max(((session.pointsAt || session.fetchedAt || Date.now()) / 1000 - h.created_at_i) / 3600, 1);
@@ -786,7 +776,7 @@ function render(list, hits) {
       hot.textContent = "🔥 Hot";
       meta.append(" ", hot);
     }
-    meta.append(` · ${ago(h.created_at_i)} · `, c, " · ", s1, " · ", s2);
+    meta.append(` · ${ago(h.created_at_i)} · `, c, " · ", s1);
     card.appendChild(meta);
     // Saved summaries were built before the card was in place; move them below the meta line.
     for (const box of li.querySelectorAll(".summary")) card.appendChild(box);
