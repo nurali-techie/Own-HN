@@ -381,7 +381,7 @@ function ago(ts) {
 // Your API key is kept only in this browser (localStorage); it is never part of the site.
 // Claude's web fetch tool reads the article on Anthropic's side, so no other service is needed.
 const KEY_KEY = "own-hn-anthropic-key";
-const SUM_KEY = "own-hn-summaries-v2"; // bump to drop summaries saved in an older format
+const SUM_KEY = "own-hn-summaries-v3"; // bump to drop summaries saved in an older format
 
 function getKey() { try { return localStorage.getItem(KEY_KEY) || ""; } catch { return ""; } }
 
@@ -418,16 +418,17 @@ function saveSummary(id, text, source) {
   } catch {}
 }
 
-// Prompt for the Summarize link (kind s1, about 75 words).
-const SUMMARY_FORMATS = {
-  s1:
-    `for a busy engineer skimming Hacker News. Keep it short: 75 words or fewer in total. ` +
+// Summary format: about 75 words, or about 95 with an "HN says" line when the discussion is big enough.
+function summaryFormat(withHN) {
+  return `for a busy engineer skimming Hacker News. Keep it short: ${withHN ? 95 : 75} words or fewer in total. ` +
     `Use exactly this format, no preamble, no markdown other than "- ":\n` +
     `TL;DR: <one sentence, at most 20 words, giving the key fact or takeaway the title doesn't already say; ` +
     `the reader has already seen the title, so never restate it>\n` +
     `- <exactly 3 bullets, at most 12 words each, with the most interesting specifics>\n` +
-    `Why it matters: <one sentence, at most 15 words>`,
-};
+    `Why it matters: <one sentence, at most 15 words>` +
+    // Optional line goes last, so every summary keeps the same shape with or without it.
+    (withHN ? `\nHN says: <one sentence, at most 20 words: the main reaction or debate in the Hacker News comments given below>` : "");
+}
 
 async function askClaude(body) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -453,34 +454,51 @@ async function askClaude(body) {
   return data.content || [];
 }
 
-// Plain text of the story's HN post and top comments, for when the article itself can't be read.
+// The story's own text and its top top-level comments in HN's ranking order. HN's official API gives
+// that order (comment IDs only); the search API gives every comment's text in one request, oldest first.
+const TOP_COMMENTS = 15;
+const HN_SAYS_MIN_COMMENTS = 10; // total comments on the story, replies included
+const HN_SAYS_MIN_TOP_LEVEL = 5;
+
 async function hnDiscussion(h) {
-  const res = await fetch("https://hn.algolia.com/api/v1/items/" + h.objectID);
-  if (!res.ok) throw new Error("Couldn't load the HN discussion (HTTP " + res.status + ").");
-  const item = await res.json();
+  const [ranked, item] = await Promise.all([
+    fetch(`https://hacker-news.firebaseio.com/v0/item/${h.objectID}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    fetch("https://hn.algolia.com/api/v1/items/" + h.objectID).then((r) => {
+      if (!r.ok) throw new Error("Couldn't load the HN discussion (HTTP " + r.status + ").");
+      return r.json();
+    }),
+  ]);
   const plain = (html) => new DOMParser().parseFromString(html || "", "text/html").body.textContent.trim();
-  let out = item.text ? "Post text:\n" + plain(item.text) + "\n\n" : "";
-  for (const c of item.children || []) {
-    if (!c.text) continue;
-    out += "Comment: " + plain(c.text) + "\n\n";
-    if (out.length > 8000) break;
-  }
-  return out.trim();
+  const byId = new Map((item.children || []).filter((c) => c.text).map((c) => [c.id, c])); // no text: deleted
+  const order = ranked?.kids || [...byId.keys()]; // HN's API unreachable: fall back to the search API's order
+  const comments = order.map((id) => byId.get(id)).filter(Boolean).slice(0, TOP_COMMENTS)
+    .map((c) => plain(c.text).slice(0, 1200)); // cap very long comments
+  return { post: item.text ? plain(item.text) : "", comments };
+}
+
+function discussionText(d) {
+  return ((d.post ? "Post text:\n" + d.post + "\n\n" : "") + d.comments.map((c, i) => `Comment ${i + 1}: ${c}`).join("\n\n")).trim();
 }
 
 // Returns { text, source } where source is "article" or "comments".
-async function summarize(h, format) {
+async function summarize(h) {
+  // Comments first: they feed the "HN says" line, and are the fallback when the article can't be read.
+  let disc = { post: "", comments: [] }, discError = null;
+  try { disc = await hnDiscussion(h); } catch (e) { discError = e; }
+  const withHN = (h.num_comments || 0) >= HN_SAYS_MIN_COMMENTS && disc.comments.length >= HN_SAYS_MIN_TOP_LEVEL;
+  const discussion = discussionText(disc);
   if (h.url) {
     const content = await askClaude({
       // 8000 tokens: at 4000 many pages (GitHub repos, news sites) were mostly navigation before the text
       tools: [{ type: "web_fetch_20250910", name: "web_fetch", max_uses: 1, max_content_tokens: 8000 }],
       messages: [{
         role: "user",
-        content: `Fetch ${h.url} and summarize it ${format}\n\n` +
+        content: `Fetch ${h.url} and summarize it ${summaryFormat(withHN)}\n\n` +
           `Any readable page counts as content: articles, blog posts, READMEs and project pages, docs, papers, ` +
           `release notes and announcements. Reply with exactly NO_CONTENT and nothing else only if the fetch failed ` +
           `or the page is essentially empty (for example it needs JavaScript and only a title or menu loaded).` +
-          `\n\nTitle: ${h.title}`,
+          `\n\nTitle: ${h.title}` +
+          (withHN ? `\n\nTop Hacker News comments, in HN's ranking order (use them only for the "HN says" line):\n\n${discussion}` : ""),
       }],
     });
     // Web fetch errors don't fail the request; they come back as an error block inside the result.
@@ -494,18 +512,20 @@ async function summarize(h, format) {
     }
   }
   // The article couldn't be read (blocked, paywalled) or there is none (Ask HN): use the HN discussion.
-  const discussion = await hnDiscussion(h);
+  if (discError) throw discError;
   if (!discussion) throw new Error("Couldn't read the article, and there are no HN comments yet.");
   const content = await askClaude({
     messages: [{
       role: "user",
-      content: `The article${h.url ? " at " + h.url + " couldn't be fetched" : " is an HN post"}. ` +
-        `From the title and the Hacker News discussion below, summarize what it is about and the main points people raise, ` +
-        `${format}\n\nTitle: ${h.title}\n\n${discussion}`,
+      // No link here: given a URL, Claude tends to say it can't open it instead of summarizing.
+      content: `${h.url ? "The linked article is not available." : "This is a Hacker News post."} ` +
+        `Using only the title and the Hacker News discussion below (do not try to open any links), ` +
+        `summarize what it is about and the main points people raise, ${summaryFormat(false)}` +
+        `\n\nTitle: ${h.title}\n\n${discussion}`,
     }],
   });
   const text = content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-  if (!text) throw new Error("No summary came back.");
+  if (!/^TL;DR:/im.test(text)) throw new Error("Couldn't read the article, and the HN discussion is too thin to summarize.");
   return { text, source: "comments" };
 }
 
@@ -537,8 +557,11 @@ function showSummary(li, kind, text, isError, source) {
   for (const l of lines) {
     if (/^tl;?dr:?/i.test(l)) box.appendChild(add("p", "tldr", "TL;DR:", l.replace(/^tl;?dr:?\s*/i, "")));
     else if (/^[-•*]\s/.test(l)) ul.appendChild(add("li", "", "", l.replace(/^[-•*]\s+/, "")));
-    else if (/^why it matters:?/i.test(l)) {
-      if (ul.childNodes.length) box.appendChild(ul);
+    else if (/^hn says:?/i.test(l)) {
+      if (ul.childNodes.length && !ul.parentNode) box.appendChild(ul); // once; re-appending would move it
+      box.appendChild(add("p", "why", "HN says:", l.replace(/^hn says:?\s*/i, "")));
+    } else if (/^why it matters:?/i.test(l)) {
+      if (ul.childNodes.length && !ul.parentNode) box.appendChild(ul); // once; re-appending would move it
       box.appendChild(add("p", "why", "Why it matters:", l.replace(/^why it matters:?\s*/i, "")));
     } else box.appendChild(add("p", "", "", l));
   }
@@ -753,7 +776,7 @@ function render(list, hits) {
         btn.disabled = true;
         showSummary(li, kind, "Summarizing…", true);
         try {
-          const { text, source } = await summarize(h, SUMMARY_FORMATS[kind]);
+          const { text, source } = await summarize(h);
           saveSummary(key, text, source);
           showSummary(li, kind, text, false, source);
           markRead(h.objectID, li);
