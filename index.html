@@ -498,7 +498,8 @@ async function summarize(h) {
           `release notes and announcements. Reply with exactly NO_CONTENT and nothing else only if the fetch failed ` +
           `or the page is essentially empty (for example it needs JavaScript and only a title or menu loaded).` +
           `\n\nTitle: ${h.title}` +
-          (withHN ? `\n\nTop Hacker News comments, in HN's ranking order (use them only for the "HN says" line):\n\n${discussion}` : ""),
+          (withHN ? `\n\nTL;DR, bullets and Why it matters must use only the fetched page; the comments below are for the "HN says" line only.` +
+            `\n\nTop Hacker News comments, in HN's ranking order:\n\n${discussion}` : ""),
       }],
     });
     // Web fetch errors don't fail the request; they come back as an error block inside the result.
