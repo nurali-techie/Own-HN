@@ -734,14 +734,14 @@ function render(list, hits) {
     const c = document.createElement("a");
     c.href = hn;
     c.textContent = (h.num_comments || 0) + " cmts"; // short, like "pts"
-    // Summarize link: asks Claude once, then shows or hides the saved summary; ✓ means it is saved on this device.
+    // Summarize link: asks Claude once, then shows or hides the saved summary.
     const makeSumLink = (kind, label) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "sum";
       const key = h.objectID;
       const box = () => li.querySelector(`.summary[data-kind="${kind}"]`);
-      const setLabel = () => { btn.textContent = sums[key] || (box() && !box().classList.contains("err")) ? label + " ✓" : label; };
+      const setLabel = () => { btn.textContent = label; };
       btn.onclick = async () => {
         const b = box();
         if (b && !b.classList.contains("err")) { b.hidden = !b.hidden; return; }
