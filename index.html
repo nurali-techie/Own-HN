@@ -144,7 +144,10 @@ const idsByPreset = {};
 const isBand = (p) => !p.q && !p.competitors && !p.security;
 
 function storiesFor(p) {
-  if (p.security) return dedupeByLink(session.results[p.id] || []);
+  if (p.security) { // all AI/LLM security stories, plus only the top OTHER_SECURITY_MAX other ones
+    const all = dedupeByLink(session.results[p.id] || []).sort((x, y) => y.points - x.points);
+    return [...all.filter(isAI), ...all.filter((h) => !isAI(h)).slice(0, OTHER_SECURITY_MAX)];
+  }
   // Stories listed under security show only there, not under any other button.
   const security = new Set(storiesFor(PRESETS.find((b) => b.security)).map((h) => h.objectID));
   const notSecurity = (h) => !security.has(h.objectID);
@@ -667,6 +670,7 @@ const SECURITY_WORDS = /\b(security|vulnerab\w*|cves?|cve-\d+-\d+|exploit\w*|bac
 const SECURITY_SITES = /safedep\.io|krebsonsecurity|bleepingcomputer|thehackernews\.com|securityweek|therecord\.media|socket\.dev|snyk\.io|portswigger|googleprojectzero|trailofbits|schneier\.com|darkreading|cisa\.gov|wiz\.io|unit42|citizenlab|embracethered/i;
 const AI_WORDS = /\b(ai|a\.i\.|llms?|gpt\S*|chatgpt|claude|openai|anthropic|gemini|copilot|cursor|mcp|agents?|agentic|prompt|models?|deepseek|mistral|ollama|hugging ?face)\b|llm/i;
 
+const OTHER_SECURITY_MAX = 5; // cap on the collapsed "other security" section, so the list stays readable daily
 const isSecurity = (h) => SECURITY_WORDS.test(h.title) || SECURITY_SITES.test(h.url || "");
 const isAI = (h) => AI_WORDS.test(h.title) || AI_WORDS.test(h.url || "");
 
