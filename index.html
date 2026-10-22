@@ -32,11 +32,6 @@
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px 40px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   .chips { display: flex; flex-direction: column; gap: 6px; }
-  /* Phones: two buttons per row, with 500+ on a row of its own. */
-  @media (max-width: 600px) {
-    .chips { display: grid; grid-template-columns: 1fr 1fr; }
-    .chips button[data-id="500"] { grid-column: 1 / -1; }
-  }
   .chips button {
     border: 1px solid var(--line); background: var(--bg); color: var(--text);
     border-radius: 8px; padding: 10px 12px; font-size: 16px; text-align: left;
@@ -45,6 +40,11 @@
   .chips button { display: flex; justify-content: space-between; align-items: center; }
   .chips .count { background: #ffe3cc; color: #b34700; border-radius: 999px; padding: 0 8px; font-size: 13px; font-weight: 600; }
   .chips button.on .count { background: rgba(255, 255, 255, 0.3); color: inherit; }
+  /* Phones: one full-width button per row (easy to reach with either thumb), but shorter rows. */
+  @media (max-width: 600px) {
+    .chips { gap: 4px; }
+    .chips button { padding: 6px 12px; }
+  }
   header .tools { display: flex; gap: 16px; }
   #status { color: var(--muted); font-size: 14px; margin: 14px 2px 8px; }
   ol { list-style: none; margin: 0; padding: 0; }
@@ -131,7 +131,6 @@ const chipsEl = $("chips");
 PRESETS.forEach((p) => {
   const b = document.createElement("button");
   b.type = "button";
-  b.dataset.id = p.id; // used by the phone layout
   const count = document.createElement("span");
   count.className = "count";
   count.hidden = true;
