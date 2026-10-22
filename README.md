@@ -27,6 +27,17 @@ A personal Hacker News reader for iPhone: one `index.html`, served by GitHub Pag
 - 100+ to 500+ show tech stories only; non-tech ones are collapsed at the end.
 - Stories move between 100+ to 500+ as points grow; read marks go with them.
 - AI 10+ holds 10-19 points and AI 20+ holds 20+; a story moves up as it gains points.
-- security (last button): 20+ point security stories; all AI/LLM ones first, top 5 other security ones collapsed at the end.
-- Stories under security don't appear under any other button.
 - The same link posted more than once shows once: the post with the most points.
+
+## Security button
+
+The last button, for security news worth reading every day.
+
+| Rule | Value |
+|---|---|
+| Points | 20+, from the same daily edition |
+| Security story | title has a security term (CVE, RCE, exploit, backdoor, malware, compromised, credential, leak, supply chain, zero-day, prompt injection, ...) or links to a security site (safedep.io, krebsonsecurity, bleepingcomputer, socket.dev, wiz.io, ...) |
+| Shown first | all AI/LLM security stories (AI words in title or link: AI, LLM, agents, Claude, GPT, OpenAI, MCP, prompt, ...) |
+| Collapsed | top 5 other security stories by points; the rest go back to their points buttons |
+| Unread count | AI/LLM security stories only |
+| Other buttons | stories listed under security don't appear anywhere else |
