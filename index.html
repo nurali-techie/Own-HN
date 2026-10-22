@@ -112,7 +112,7 @@ const PRESETS = [
   { id: "300", label: "300+", min: 300, max: 399, techOnly: true },
   { id: "400", label: "400+", min: 400, max: 499, techOnly: true },
   { id: "500", label: "500+", min: 500, max: null, techOnly: true },
-  { id: "ai", label: "AI 10+", min: 10, max: null, q: "ai" },
+  { id: "ai", label: "AI 10+", min: 10, max: 19, q: "ai" }, // 10-19; 20+ is under AI 20+
   { id: "ai20", label: "AI 20+", min: 20, max: null, q: "ai" },
   { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24 },
   // AI/LLM security stories first; other security stories collapsed below (see isSecurity, isAI).
@@ -144,10 +144,36 @@ const idsByPreset = {};
 const isBand = (p) => !p.q && !p.competitors && !p.security;
 
 function storiesFor(p) {
-  if (!isBand(p)) return session.results[p.id] || [];
+  if (p.security) return dedupeByLink(session.results[p.id] || []);
+  // Stories listed under security show only there, not under any other button.
+  const security = new Set(storiesFor(PRESETS.find((b) => b.security)).map((h) => h.objectID));
+  const notSecurity = (h) => !security.has(h.objectID);
+  // Buttons in one group (100+ ... 500+, or AI 10+ / AI 20+) share their stories, split by latest points.
+  const sameGroup = (b) => (isBand(p) && isBand(b)) || (p.q && b.q === p.q);
+  if (!isBand(p) && !p.q) return dedupeByLink(session.results[p.id] || []).filter(notSecurity);
   const pool = new Map();
-  for (const b of PRESETS) if (isBand(b)) for (const h of session.results[b.id] || []) pool.set(h.objectID, h);
-  return [...pool.values()].filter((h) => h.points >= p.min && (p.max === null || h.points <= p.max));
+  for (const b of PRESETS) if (sameGroup(b)) for (const h of session.results[b.id] || []) pool.set(h.objectID, h);
+  return dedupeByLink([...pool.values()]).filter((h) => notSecurity(h) && h.points >= p.min && (p.max === null || h.points <= p.max));
+}
+
+// The same link posted more than once on HN: keep only the post with the most points.
+function linkKey(url) {
+  try {
+    const u = new URL(url);
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_\w+|ref|fbclid|gclid)$/i.test(k)) u.searchParams.delete(k); // tracking only
+    return (u.hostname.replace(/^www\./, "") + u.pathname.replace(/\/+$/, "") + (u.search ? u.search : "")).toLowerCase();
+  } catch { return null; }
+}
+
+function dedupeByLink(stories) {
+  const best = new Map();
+  for (const h of stories) {
+    const key = h.url && linkKey(h.url);
+    if (!key) { best.set(h.objectID, h); continue; } // no link (Ask HN): never merged
+    const seen = best.get(key);
+    if (!seen || h.points > seen.points) best.set(key, h);
+  }
+  return [...best.values()];
 }
 
 // Recompute every loaded button's visible story IDs, e.g. after points change.
