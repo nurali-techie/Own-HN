@@ -26,3 +26,4 @@ A personal Hacker News reader for iPhone: one `index.html`, served by GitHub Pag
 - Sorted by points, highest first; unread stories first, read ones last.
 - 100+ to 500+ show tech stories only; non-tech ones are collapsed at the end.
 - Stories move between 100+ to 500+ as points grow; read marks go with them.
+- security (last button): 20+ point security stories; AI/LLM ones first, other security ones collapsed at the end.

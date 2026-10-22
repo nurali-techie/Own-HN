@@ -115,6 +115,8 @@ const PRESETS = [
   { id: "ai", label: "AI 10+", min: 10, max: null, q: "ai" },
   { id: "ai20", label: "AI 20+", min: 20, max: null, q: "ai" },
   { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24 },
+  // AI/LLM security stories first; other security stories collapsed below (see isSecurity, isAI).
+  { id: "security", label: "security", min: 20, max: null, security: true },
 ];
 const DEFAULT_ID = "500";
 
@@ -139,7 +141,7 @@ const idsByPreset = {};
 // The points buttons (100+ … 500+) share one pool: the stories they loaded at the edition start.
 // Each button shows the pool's stories whose latest points fall in its band, so a story moves from
 // 100+ to 200+ as it gains points (its read mark goes with it), but none join during the day.
-const isBand = (p) => !p.q && !p.competitors;
+const isBand = (p) => !p.q && !p.competitors && !p.security;
 
 function storiesFor(p) {
   if (!isBand(p)) return session.results[p.id] || [];
@@ -153,8 +155,12 @@ function recomputeIds() {
   for (const p of PRESETS) if (session.results[p.id]) idsByPreset[p.id] = visibleIds(p, storiesFor(p));
 }
 
+// Stories a button shows up front (and counts); the rest go to its collapsed section.
+const primaryOf = (p) => (p.techOnly ? isTech : p.security ? isAI : null);
+
 function visibleIds(p, all) {
-  return (p.techOnly ? all.filter(isTech) : all).map((h) => h.objectID);
+  const keep = primaryOf(p);
+  return (keep ? all.filter(keep) : all).map((h) => h.objectID);
 }
 
 function updateCounts() {
@@ -367,7 +373,8 @@ async function fetchAll(f, edition) {
     hits.push(...data.hits);
     if (page + 1 >= data.nbPages) break;
   }
-  return hits.sort((a, b) => b.points - a.points);
+  hits.sort((a, b) => b.points - a.points);
+  return f.security ? hits.filter(isSecurity) : hits; // security keeps only security stories
 }
 
 function ago(ts) {
@@ -629,6 +636,14 @@ function isTechWord(w) {
   return TECH_STEMS.some((s) => w.startsWith(s));
 }
 
+// Security filter: specific terms only (not bare "attack" or "cyber"), or a known security site.
+const SECURITY_WORDS = /\b(security|vulnerab\w*|cves?|cve-\d+-\d+|exploit\w*|backdoor\w*|malware|ransomware|phishing|breach\w*|hacked|hackers?|compromis\w*|supply[- ]chain|zero[- ]day|0[- ]?day|rce|xss|csrf|ssrf|credentials?|leak\w*|stealer|infostealer|spyware|trojan|botnet|ddos|cyberattack\w*|cybersecurity|cybercrim\w*|patch(ed|es)?|sandbox escape|privilege escalation|account takeover|prompt injection|jailbreak\w*|extortion|exfiltrat\w*)\b/i;
+const SECURITY_SITES = /safedep\.io|krebsonsecurity|bleepingcomputer|thehackernews\.com|securityweek|therecord\.media|socket\.dev|snyk\.io|portswigger|googleprojectzero|trailofbits|schneier\.com|darkreading|cisa\.gov|wiz\.io|unit42|citizenlab|embracethered/i;
+const AI_WORDS = /\b(ai|a\.i\.|llms?|gpt\S*|chatgpt|claude|openai|anthropic|gemini|copilot|cursor|mcp|agents?|agentic|prompt|models?|deepseek|mistral|ollama|hugging ?face)\b|llm/i;
+
+const isSecurity = (h) => SECURITY_WORDS.test(h.title) || SECURITY_SITES.test(h.url || "");
+const isAI = (h) => AI_WORDS.test(h.title) || AI_WORDS.test(h.url || "");
+
 function isTech(h) {
   const t = h.title.toLowerCase();
   if (t.startsWith("show hn")) return true;
@@ -824,19 +839,21 @@ async function run(f) {
     await getResults(f);
     const all = [...storiesFor(f)].sort((a, b) => b.points - a.points); // latest points first
     if (id !== runId) return; // a newer search started meanwhile
-    const hits = f.techOnly ? all.filter(isTech) : all;
-    const hidden = f.techOnly ? all.filter((h) => !isTech(h)) : [];
+    const keep = primaryOf(f);
+    const hits = keep ? all.filter(keep) : all;
+    const hidden = keep ? all.filter((h) => !keep(h)) : [];
     render($("list"), hits);
     render($("hiddenList"), hidden);
     $("hiddenList").hidden = true;
     const more = $("moreBtn");
     more.hidden = hidden.length === 0;
-    more.textContent = `Show ${hidden.length} non-tech ${hidden.length === 1 ? "story" : "stories"}`;
-    const n = (k) => `${k} ${f.techOnly ? "tech " : ""}${k === 1 ? "story" : "stories"}`;
+    more.textContent = `Show ${hidden.length} ${f.security ? "other security" : "non-tech"} ${hidden.length === 1 ? "story" : "stories"}`;
+    const kind = f.techOnly ? "tech " : f.security ? "AI security " : "";
+    const n = (k) => `${k} ${kind}${k === 1 ? "story" : "stories"}`;
     const span = f.hours ? ` (${f.hours / 24} days)` : "";
     $("status").textContent = hits.length
       ? `${n(hits.length)} in today's edition${span}, most points first`
-      : `No ${f.techOnly ? "tech " : ""}stories in today's edition${span}.`;
+      : `No ${kind}stories in today's edition${span}.`;
   } catch (e) {
     if (id !== runId) return;
     $("list").replaceChildren();
