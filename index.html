@@ -31,7 +31,7 @@
   header button { background: none; border: 0; color: inherit; font-size: 14px; padding: 4px 0; }
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px 40px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-  .chips { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .chips { display: flex; flex-direction: column; gap: 6px; }
   .chips button {
     border: 1px solid var(--line); background: var(--bg); color: var(--text);
     border-radius: 8px; padding: 10px 12px; font-size: 16px; text-align: left;
@@ -116,19 +116,18 @@ const TAGS = "(story,poll)";
 // Quick filters. Points max is inclusive; null means no upper limit.
 const PRESETS = [
 // techOnly hides stories that don't look tech-related (see isTech below).
-// span: width in the 6-column button grid (2 = a third, 3 = a half, 6 = a full row).
-  { id: "100", label: "100+", min: 100, max: 199, techOnly: true, span: 2 },
-  { id: "200", label: "200+", min: 200, max: 299, techOnly: true, span: 2 },
-  { id: "300", label: "300+", min: 300, max: 399, techOnly: true, span: 2 },
-  { id: "400", label: "400+", min: 400, max: 499, techOnly: true, span: 3 },
-  { id: "500", label: "500+", min: 500, max: null, techOnly: true, span: 3 },
+  { id: "100", label: "100+", min: 100, max: 199, techOnly: true },
+  { id: "200", label: "200+", min: 200, max: 299, techOnly: true },
+  { id: "300", label: "300+", min: 300, max: 399, techOnly: true },
+  { id: "400", label: "400+", min: 400, max: 499, techOnly: true },
+  { id: "500", label: "500+", min: 500, max: null, techOnly: true },
   // AI buttons don't overlap: 20-49, 50-99, 100+; a story moves up as it gains points.
-  { id: "ai20", label: "AI 20+", min: 20, max: 49, ai: true, span: 6 },
-  { id: "ai50", label: "AI 50+", min: 50, max: 99, ai: true, span: 6 },
-  { id: "ai100", label: "AI 100+", min: 100, max: null, ai: true, span: 6 },
-  { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24, span: 3 },
+  { id: "ai20", label: "AI 20+", min: 20, max: 49, ai: true },
+  { id: "ai50", label: "AI 50+", min: 50, max: 99, ai: true },
+  { id: "ai100", label: "AI 100+", min: 100, max: null, ai: true },
+  { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24 },
   // AI/LLM security stories first; other security stories collapsed below (see isSecurity, isAI).
-  { id: "security", label: "security", min: 20, max: null, security: true, span: 3 },
+  { id: "security", label: "security", min: 20, max: null, security: true },
 ];
 const DEFAULT_ID = "500";
 
@@ -138,7 +137,6 @@ const chipsEl = $("chips");
 PRESETS.forEach((p) => {
   const b = document.createElement("button");
   b.type = "button";
-  b.style.gridColumn = "span " + p.span;
   const count = document.createElement("span");
   count.className = "count";
   count.hidden = true;
