@@ -26,8 +26,10 @@ A personal Hacker News reader for iPhone: one `index.html`, served by GitHub Pag
 - Sorted by points, highest first; unread stories first, read ones last.
 - 100+ to 500+ show tech stories only; non-tech ones are collapsed at the end.
 - Stories move between 100+ to 500+ as points grow; read marks go with them.
-- AI 10+ holds 10-19 points and AI 20+ holds 20+; a story moves up as it gains points.
+- AI 20+ holds 20-49 points, AI 50+ holds 50-99, AI 100+ holds 100+; a story moves up as it gains points.
+- An AI story has an AI term in its title or link: AI, LLM, GPT, Claude, OpenAI, Anthropic, Gemini, MCP, AI/coding agents, Llama, Qwen, inference, ...
 - The same link posted more than once shows once: the post with the most points.
+- Each story shows under one button only, by priority: watch, then security, then AI 20+ / 50+ / 100+, then 100+ to 500+.
 
 ## Security button
 
@@ -40,4 +42,4 @@ The last button, for security news worth reading every day.
 | Shown first | all AI/LLM security stories (AI words in title or link: AI, LLM, agents, Claude, GPT, OpenAI, MCP, prompt, ...) |
 | Collapsed | top 5 other security stories by points; the rest go back to their points buttons |
 | Unread count | AI/LLM security stories only |
-| Other buttons | stories listed under security don't appear anywhere else |
+| Other buttons | stories listed under security don't appear under AI or points buttons; watch stories stay under watch |

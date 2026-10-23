@@ -31,7 +31,7 @@
   header button { background: none; border: 0; color: inherit; font-size: 14px; padding: 4px 0; }
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px 40px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-  .chips { display: flex; flex-direction: column; gap: 6px; }
+  .chips { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
   .chips button {
     border: 1px solid var(--line); background: var(--bg); color: var(--text);
     border-radius: 8px; padding: 10px 12px; font-size: 16px; text-align: left;
@@ -116,16 +116,19 @@ const TAGS = "(story,poll)";
 // Quick filters. Points max is inclusive; null means no upper limit.
 const PRESETS = [
 // techOnly hides stories that don't look tech-related (see isTech below).
-  { id: "100", label: "100+", min: 100, max: 199, techOnly: true },
-  { id: "200", label: "200+", min: 200, max: 299, techOnly: true },
-  { id: "300", label: "300+", min: 300, max: 399, techOnly: true },
-  { id: "400", label: "400+", min: 400, max: 499, techOnly: true },
-  { id: "500", label: "500+", min: 500, max: null, techOnly: true },
-  { id: "ai", label: "AI 10+", min: 10, max: 19, q: "ai" }, // 10-19; 20+ is under AI 20+
-  { id: "ai20", label: "AI 20+", min: 20, max: null, q: "ai" },
-  { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24 },
+// span: width in the 6-column button grid (2 = a third, 3 = a half, 6 = a full row).
+  { id: "100", label: "100+", min: 100, max: 199, techOnly: true, span: 2 },
+  { id: "200", label: "200+", min: 200, max: 299, techOnly: true, span: 2 },
+  { id: "300", label: "300+", min: 300, max: 399, techOnly: true, span: 2 },
+  { id: "400", label: "400+", min: 400, max: 499, techOnly: true, span: 3 },
+  { id: "500", label: "500+", min: 500, max: null, techOnly: true, span: 3 },
+  // AI buttons don't overlap: 20-49, 50-99, 100+; a story moves up as it gains points.
+  { id: "ai20", label: "AI 20+", min: 20, max: 49, ai: true, span: 6 },
+  { id: "ai50", label: "AI 50+", min: 50, max: 99, ai: true, span: 6 },
+  { id: "ai100", label: "AI 100+", min: 100, max: null, ai: true, span: 6 },
+  { id: "eyes", label: "watch", min: 1, max: null, competitors: true, hours: 7 * 24, span: 3 },
   // AI/LLM security stories first; other security stories collapsed below (see isSecurity, isAI).
-  { id: "security", label: "security", min: 20, max: null, security: true },
+  { id: "security", label: "security", min: 20, max: null, security: true, span: 3 },
 ];
 const DEFAULT_ID = "500";
 
@@ -135,6 +138,7 @@ const chipsEl = $("chips");
 PRESETS.forEach((p) => {
   const b = document.createElement("button");
   b.type = "button";
+  b.style.gridColumn = "span " + p.span;
   const count = document.createElement("span");
   count.className = "count";
   count.hidden = true;
@@ -150,22 +154,26 @@ const idsByPreset = {};
 // The points buttons (100+ … 500+) share one pool: the stories they loaded at the edition start.
 // Each button shows the pool's stories whose latest points fall in its band, so a story moves from
 // 100+ to 200+ as it gains points (its read mark goes with it), but none join during the day.
-const isBand = (p) => !p.q && !p.competitors && !p.security;
+
+// Every story shows under one button only. Groups in priority order: a story listed by a group
+// never appears in a later one (e.g. a security story about a competitor shows only under watch).
+const GROUPS = ["watch", "security", "ai", "band"];
+const groupOf = (p) => (p.competitors ? "watch" : p.security ? "security" : p.ai ? "ai" : "band");
+const rankOf = (p) => GROUPS.indexOf(groupOf(p));
 
 function storiesFor(p) {
+  const taken = new Set(); // stories already listed by a higher-priority group
+  for (const b of PRESETS) if (rankOf(b) < rankOf(p)) for (const h of storiesFor(b)) taken.add(h.objectID);
+  const free = (h) => !taken.has(h.objectID);
+  if (p.competitors) return dedupeByLink(session.results[p.id] || []);
   if (p.security) { // all AI/LLM security stories, plus only the top OTHER_SECURITY_MAX other ones
-    const all = dedupeByLink(session.results[p.id] || []).sort((x, y) => y.points - x.points);
+    const all = dedupeByLink(session.results[p.id] || []).filter(free).sort((x, y) => y.points - x.points);
     return [...all.filter(isAI), ...all.filter((h) => !isAI(h)).slice(0, OTHER_SECURITY_MAX)];
   }
-  // Stories listed under security show only there, not under any other button.
-  const security = new Set(storiesFor(PRESETS.find((b) => b.security)).map((h) => h.objectID));
-  const notSecurity = (h) => !security.has(h.objectID);
-  // Buttons in one group (100+ ... 500+, or AI 10+ / AI 20+) share their stories, split by latest points.
-  const sameGroup = (b) => (isBand(p) && isBand(b)) || (p.q && b.q === p.q);
-  if (!isBand(p) && !p.q) return dedupeByLink(session.results[p.id] || []).filter(notSecurity);
+  // AI 20+ / 50+ / 100+, and 100+ ... 500+, each share one pool, split by latest points.
   const pool = new Map();
-  for (const b of PRESETS) if (sameGroup(b)) for (const h of session.results[b.id] || []) pool.set(h.objectID, h);
-  return dedupeByLink([...pool.values()]).filter((h) => notSecurity(h) && h.points >= p.min && (p.max === null || h.points <= p.max));
+  for (const b of PRESETS) if (groupOf(b) === groupOf(p)) for (const h of session.results[b.id] || []) pool.set(h.objectID, h);
+  return dedupeByLink([...pool.values()]).filter((h) => free(h) && h.points >= p.min && (p.max === null || h.points <= p.max));
 }
 
 // The same link posted more than once on HN: keep only the post with the most points.
@@ -215,7 +223,7 @@ function updateCounts() {
 // button's stories once; they are saved on the device and reused all day, so no new stories
 // appear until the next edition. Each edition covers stories posted up to LAG_HOURS before
 // 7 AM, so every story has had time to collect points, and each story lands in exactly one edition.
-const SESSION_KEY = "own-hn-session";
+const SESSION_KEY = "own-hn-session-v2"; // bump when what a button loads changes
 const EDITION_HOUR_IST = 7;
 const LAG_HOURS = 6;
 const IST_OFFSET = 5.5 * 3600 * 1000; // IST is UTC+5:30 all year
@@ -252,8 +260,8 @@ function getResults(p) {
           recomputeIds();
           updateCounts();
           saveSession();
-          // Security stories leave the other buttons, so redraw the shown list if it was drawn without them.
-          if (p.security && current && !current.security) run(current);
+          // A higher-priority group takes its stories from later buttons: redraw the shown list if it is later.
+          if (current && rankOf(p) < rankOf(current)) run(current);
         }
         return hits;
       })
@@ -402,11 +410,9 @@ async function fetchAll(f, edition) {
       numericFilters: filters.join(","),
       hitsPerPage: 1000,
       page,
-      queryType: "prefixNone", // "ai" matches the word ai, not "aim" or "air"
       attributesToRetrieve: "title,url,points,num_comments,created_at_i,objectID",
       attributesToHighlight: "",
     });
-    if (f.q) p.set("query", f.q);
     const res = await fetch(API + "?" + p);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
@@ -414,7 +420,8 @@ async function fetchAll(f, edition) {
     if (page + 1 >= data.nbPages) break;
   }
   hits.sort((a, b) => b.points - a.points);
-  return f.security ? hits.filter(isSecurity) : hits; // security keeps only security stories
+  if (f.security) return hits.filter(isSecurity); // security keeps only security stories
+  return f.ai ? hits.filter(isAI) : hits; // AI buttons keep only AI stories (title or link)
 }
 
 function ago(ts) {
@@ -679,7 +686,8 @@ function isTechWord(w) {
 // Security filter: specific terms only (not bare "attack" or "cyber"), or a known security site.
 const SECURITY_WORDS = /\b(security|vulnerab\w*|cves?|cve-\d+-\d+|exploit\w*|backdoor\w*|malware|ransomware|phishing|breach\w*|hacked|hackers?|compromis\w*|supply[- ]chain|zero[- ]day|0[- ]?day|rce|xss|csrf|ssrf|credentials?|leak\w*|stealer|infostealer|spyware|trojan|botnet|ddos|cyberattack\w*|cybersecurity|cybercrim\w*|patch(ed|es)?|sandbox escape|privilege escalation|account takeover|prompt injection|jailbreak\w*|extortion|exfiltrat\w*)\b/i;
 const SECURITY_SITES = /safedep\.io|krebsonsecurity|bleepingcomputer|thehackernews\.com|securityweek|therecord\.media|socket\.dev|snyk\.io|portswigger|googleprojectzero|trailofbits|schneier\.com|darkreading|cisa\.gov|wiz\.io|unit42|citizenlab|embracethered/i;
-const AI_WORDS = /\b(ai|a\.i\.|llms?|gpt\S*|chatgpt|claude|openai|anthropic|gemini|copilot|cursor|mcp|agents?|agentic|prompt|models?|deepseek|mistral|ollama|hugging ?face)\b|llm/i;
+// AI terms; "agent" and "model" only inside AI phrases, since alone they also mean police agents or mental models.
+const AI_WORDS = /\b(ai|a\.i\.|llms?|gpt\S*|chatgpt|claude|openai|anthropic|gemini|copilot|cursor|codex|mcp|agentic|(ai|coding|llm|autonomous) agents?|agents? harness\w*|prompt\w*|deepseek|mistral|qwen\S*|llama\S*|gguf|grok|ollama|hugging ?face|machine learning|neural|transformers?|fine-tun\w*|embeddings?|inference|vision models?|language models?|reasoning models?|open[- ]weights?)\b|llm/i;
 
 const OTHER_SECURITY_MAX = 5; // cap on the collapsed "other security" section, so the list stays readable daily
 const isSecurity = (h) => SECURITY_WORDS.test(h.title) || SECURITY_SITES.test(h.url || "");
