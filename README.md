@@ -43,3 +43,7 @@ The last button, for security news worth reading every day.
 | Collapsed | top 5 other security stories by points; the rest go back to their points buttons |
 | Unread count | AI/LLM security stories only |
 | Other buttons | stories listed under security don't appear under AI or points buttons; watch stories stay under watch |
+
+## Links
+
+"Links" in the header lists sites to check now and then, unrelated to HN (e.g. the H100 rental price index, the Neolab list). Each shows when it was last opened on this device; add one with a line in `LINKS` in `index.html`.

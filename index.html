@@ -75,6 +75,12 @@
   li.read .card > :not(.summary) { opacity: 0.5; }
   li.read a.t { font-weight: 400; }
   .dom { color: var(--muted); font-size: 13px; }
+  #links { margin-top: 14px; }
+  .link { display: block; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; color: var(--text); text-decoration: none; }
+  .link b { font-weight: 600; }
+  .link p { margin: 4px 0 0; font-size: 14px; color: var(--text); }
+  .link .meta { margin-top: 6px; }
+  header button.on { text-decoration: underline; font-weight: 700; }
   .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .meta a { color: var(--muted); }
   .meta button.sum { background: none; border: 0; padding: 0 2px; font: inherit; font-size: 15px; font-weight: 600; color: var(--accent); text-decoration: underline; }
@@ -96,7 +102,7 @@
 </style>
 </head>
 <body>
-<header>Own-HN <span class="tools"><button id="keyBtn" type="button">⚙ API key</button></span></header>
+<header>Own-HN <span class="tools"><button id="linksBtn" type="button">Links</button><button id="keyBtn" type="button">⚙ API key</button></span></header>
 <main>
   <div class="card"><div class="chips" id="chips"></div></div>
 
@@ -104,6 +110,7 @@
   <ol id="list"></ol>
   <button class="more" id="moreBtn" type="button" hidden></button>
   <ol id="hiddenList" hidden></ol>
+  <div id="links" hidden></div>
 </main>
 
 <script>
@@ -320,6 +327,7 @@ function fromUrl() {
 let current = null;
 
 function select(p) {
+  showLinks(false);
   current = p;
   history.replaceState(null, "", "?f=" + p.id);
   [...chipsEl.children].forEach((b, i) => b.classList.toggle("on", PRESETS[i] === p));
@@ -893,7 +901,7 @@ async function run(f) {
     render($("hiddenList"), hidden);
     $("hiddenList").hidden = true;
     const more = $("moreBtn");
-    more.hidden = hidden.length === 0;
+    more.hidden = hidden.length === 0 || !$("links").hidden; // a redraw while Links is shown stays out of view
     more.textContent = `Show ${hidden.length} ${f.security ? "other security" : "non-tech"} ${hidden.length === 1 ? "story" : "stories"}`;
     const kind = f.techOnly ? "tech " : f.security ? "AI security " : "";
     const n = (k) => `${k} ${kind}${k === 1 ? "story" : "stories"}`;
@@ -911,6 +919,60 @@ async function run(f) {
 }
 
 $("keyBtn").onclick = askKey;
+
+// Links: sites to check now and then, unrelated to HN. Add one entry per line.
+const LINKS = [
+  { title: "H100 rental price index", url: "https://theinference.org/indexes/gpu-h100",
+    note: "Hourly on-demand price to rent one NVIDIA H100 SXM, from The Inference. $3.39/hr on 2026-11-04, about +17% in a year." },
+  { title: "The Ultimate Neolab List", url: "https://debarghyadas.com/neolabs/",
+    note: "Deedy Das's list of AI neolabs ranked by valuation, with a verdict, founders and backers for each. 106 labs as of Oct 24, 2026." },
+];
+const LINKS_KEY = "own-hn-links-opened"; // url -> when it was last opened on this device
+
+function linksOpened() {
+  try { return JSON.parse(localStorage.getItem(LINKS_KEY)) || {}; } catch { return {}; }
+}
+
+function renderLinks() {
+  const opened = linksOpened();
+  $("links").replaceChildren(...LINKS.map((l) => {
+    const a = document.createElement("a");
+    a.className = "link";
+    a.href = l.url;
+    const title = document.createElement("b");
+    title.textContent = l.title;
+    const site = document.createElement("span");
+    site.className = "dom";
+    site.textContent = " (" + domain(l.url) + ")";
+    const note = document.createElement("p");
+    note.textContent = l.note;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const days = opened[l.url] ? Math.floor((Date.now() - opened[l.url]) / 86400000) : null;
+    meta.textContent = days === null ? "not opened yet" : days === 0 ? "opened today" : `opened ${days} day${days === 1 ? "" : "s"} ago`;
+    a.append(title, site, note, meta);
+    a.onclick = () => {
+      try { localStorage.setItem(LINKS_KEY, JSON.stringify({ ...linksOpened(), [l.url]: Date.now() })); } catch {}
+      renderLinks();
+    };
+    return a;
+  }));
+}
+
+// The links view replaces the story list; tapping a button brings the stories back.
+function showLinks(on) {
+  $("links").hidden = !on;
+  for (const id of ["status", "list"]) $(id).hidden = on;
+  if (on) { $("moreBtn").hidden = true; $("hiddenList").hidden = true; }
+  $("linksBtn").classList.toggle("on", on);
+  if (on) {
+    renderLinks();
+    history.replaceState(null, "", "?f=links");
+    [...chipsEl.children].forEach((b) => b.classList.remove("on"));
+  }
+}
+
+$("linksBtn").onclick = () => (($("links").hidden) ? showLinks(true) : select(current));
 
 $("moreBtn").onclick = () => {
   const list = $("hiddenList");
@@ -935,7 +997,9 @@ document.addEventListener("visibilitychange", () => {
 
 loadSession();
 if (!session.at) startSession(fromUrl());
+const startOnLinks = new URLSearchParams(location.search).get("f") === "links"; // read before select() rewrites the URL
 select(fromUrl());
+if (startOnLinks) showLinks(true);
 updateCounts();
 refreshPoints().catch(() => {});
 </script>
